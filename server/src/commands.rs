@@ -16,4 +16,5 @@ pub enum ChannelCommands {
     ),
     UserJoined(String, SocketAddr),
     UserLeft(SocketAddr),
+    UsersQuery(SocketAddr),
 }

@@ -61,6 +61,10 @@ async fn main() {
         println!("Failed to login ;/");
         std::process::exit(1);
     }
+    writer
+        .write_packet(ServerboundPacket::Message("/list".to_string()))
+        .await
+        .unwrap();
 
     // To send close command when tcpstream is closed
     let (tx, rx) = oneshot::channel::<()>();
@@ -84,6 +88,14 @@ async fn reading_loop(
             }
             Ok(Some(ClientboundPacket::UserLeft(username))) => {
                 println!("{} left the channel", username);
+            }
+            Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
+                println!("-------------");
+                println!("Users online:");
+                for username in &usernames {
+                    println!("  {}", username);
+                }
+                println!("-------------");
             }
             Ok(Some(p)) => {
                 println!("!!Unhandled packet: {:?}", p);

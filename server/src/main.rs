@@ -74,6 +74,16 @@ async fn channel_loop(mut receiver: Receiver<ChannelCommands>) {
                     .ok();
                 }
             }
+            UsersQuery(addr) => {
+                let tx = txs
+                    .get(&addr)
+                    .unwrap_or_else(|| panic!("Wrong reply addr: {}", addr));
+                tx.send(ServerConnectionCommands::Write(
+                    ClientboundPacket::UsersOnline(usernames.values().cloned().collect()),
+                ))
+                .await
+                .unwrap();
+            }
         }
     }
 }
@@ -97,21 +107,28 @@ async fn reading_loop(
                             connection_sender.send(com).await.unwrap();
                         }
                         ServerboundPacket::Message(m) => {
-                            use std::time::{SystemTime, UNIX_EPOCH};
-                            let p = ClientboundPacket::Message {
-                                text: m,
-                                sender: username
-                                    .clone()
-                                    .expect("Not logged in user tried to send a message"),
-                                time: SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs(),
-                            };
-                            channel_sender
-                                .send(ChannelCommands::Write(p))
-                                .await
-                                .unwrap();
+                            if &m == "/list" {
+                                channel_sender
+                                    .send(ChannelCommands::UsersQuery(addr))
+                                    .await
+                                    .unwrap();
+                            } else {
+                                use std::time::{SystemTime, UNIX_EPOCH};
+                                let p = ClientboundPacket::Message {
+                                    text: m,
+                                    sender: username
+                                        .clone()
+                                        .expect("Not logged in user tried to send a message"),
+                                    time: SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_secs(),
+                                };
+                                channel_sender
+                                    .send(ChannelCommands::Write(p))
+                                    .await
+                                    .unwrap();
+                            }
                         }
                         ServerboundPacket::Login {
                             username: un,

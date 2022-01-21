@@ -34,6 +34,7 @@ pub enum ClientboundPacket {
     LoginAck,
     UserJoined(String),
     UserLeft(String),
+    UsersOnline(Vec<String>),
     Message {
         text: String,
         sender: String,
