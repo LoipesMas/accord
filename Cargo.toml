@@ -1,0 +1,19 @@
+[package]
+name = "accord"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+    "client",
+    "server",
+]
+
+
+[dependencies]
+serde = {version = "1.0.133", features = ["derive"]}
+rmp-serde = "1.0.0"
+tokio = {version = "1.15.0", features = ["full"]}
+bytes = "1.1"
