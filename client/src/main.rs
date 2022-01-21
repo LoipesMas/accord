@@ -62,7 +62,7 @@ async fn main() {
         std::process::exit(1);
     }
     writer
-        .write_packet(ServerboundPacket::Message("/list".to_string()))
+        .write_packet(ServerboundPacket::Command("list".to_string()))
         .await
         .unwrap();
 
@@ -131,7 +131,11 @@ async fn writing_loop(
                     }
 
                     if !s.is_empty() {
-                        let p = ServerboundPacket::Message(s);
+                        let p = if let Some(command) = s.strip_prefix('/') {
+                            ServerboundPacket::Command(command.to_string())
+                        } else {
+                            ServerboundPacket::Message(s)
+                        };
                         writer.write_packet(p).await.unwrap();
                         // Clear input line
                         print!("\r\u{1b}[A");

@@ -107,29 +107,37 @@ async fn reading_loop(
                             connection_sender.send(com).await.unwrap();
                         }
                         ServerboundPacket::Message(m) => {
-                            if &m == "/list" {
+                            let p = ClientboundPacket::Message {
+                                text: m,
+                                sender: username
+                                    .clone()
+                                    .expect("Not logged in user tried to send a message"),
+                                time: current_time_as_sec(),
+                            };
+                            channel_sender
+                                .send(ChannelCommands::Write(p))
+                                .await
+                                .unwrap();
+                        }
+                        ServerboundPacket::Command(command) => match command.as_str() {
+                            "list" => {
                                 channel_sender
                                     .send(ChannelCommands::UsersQuery(addr))
                                     .await
                                     .unwrap();
-                            } else {
-                                use std::time::{SystemTime, UNIX_EPOCH};
+                            }
+                            c => {
                                 let p = ClientboundPacket::Message {
-                                    text: m,
-                                    sender: username
-                                        .clone()
-                                        .expect("Not logged in user tried to send a message"),
-                                    time: SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs(),
+                                    text: format!("Unknown command: {}", c),
+                                    sender: "#SERVER#".to_string(),
+                                    time: current_time_as_sec(),
                                 };
-                                channel_sender
-                                    .send(ChannelCommands::Write(p))
+                                connection_sender
+                                    .send(ServerConnectionCommands::Write(p))
                                     .await
                                     .unwrap();
                             }
-                        }
+                        },
                         ServerboundPacket::Login {
                             username: un,
                             password: _,
@@ -185,4 +193,13 @@ async fn writing_loop(
             }
         }
     }
+}
+
+#[inline]
+fn current_time_as_sec() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }

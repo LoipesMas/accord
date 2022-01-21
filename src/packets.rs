@@ -13,6 +13,7 @@ pub enum ServerboundPacket {
     Ping,
     Login { username: String, password: String },
     Message(String),
+    Command(String),
 }
 
 impl Packet for ServerboundPacket {
