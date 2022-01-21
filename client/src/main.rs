@@ -26,8 +26,17 @@ async fn main() {
         let mut buf = bytes::BytesMut::new();
         match stdio.read_buf(&mut buf).await {
             Ok(0 | 1) => println!("Username can't be empty!"),
-            Ok(_) => {
-                break String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
+            Ok(l) => {
+                if l > 18 {
+                   println!("Username too long. (Max 17 characters)");
+                   continue;
+                }
+                let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
+                if s.chars().any(|c| !c.is_alphanumeric()){
+                   println!("Invalid characters in username.");
+                } else {
+                    break s;
+                }
             }
             Err(e) => println!("Error: {:?}", e),
         };
