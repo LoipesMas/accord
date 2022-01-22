@@ -19,8 +19,6 @@ dependencies = [
  "accord",
  "bytes",
  "chrono",
- "rmp-serde",
- "serde",
  "tokio",
 ]
 
@@ -29,9 +27,6 @@ name = "accord-server"
 version = "0.1.0"
 dependencies = [
  "accord",
- "bytes",
- "rmp-serde",
- "serde",
  "sha2",
  "tokio",
 ]
