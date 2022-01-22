@@ -6,8 +6,10 @@ mod commands;
 use commands::*;
 
 use accord::packets::*;
+use accord::utils::{verify_message, verify_username};
 
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::oneshot;
 
 #[tokio::main]
 async fn main() {
@@ -36,7 +38,8 @@ async fn main() {
 async fn channel_loop(mut receiver: Receiver<ChannelCommands>) {
     use std::collections::HashMap;
     let mut txs: HashMap<std::net::SocketAddr, Sender<ServerConnectionCommands>> = HashMap::new();
-    let mut usernames: HashMap<std::net::SocketAddr, String> = HashMap::new();
+    let mut connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
+    let mut accounts: HashMap<String, [u8; 32]> = HashMap::new();
     loop {
         use ChannelCommands::*;
         match receiver.recv().await.unwrap() {
@@ -52,7 +55,40 @@ async fn channel_loop(mut receiver: Receiver<ChannelCommands>) {
                         .ok();
                 }
             }
-            UserJoined(username, addr) => {
+            LoginAttempt {
+                username,
+                password,
+                addr,
+                otx,
+            } => {
+                let pass_hash = hash_password(password);
+                let res;
+                if !verify_username(&username) {
+                    res = LoginOneshotCommand::Failed("Invalid username!".to_string());
+                } else if let Some(pass_hash_existing) = accounts.get(&username) {
+                    if &pass_hash == pass_hash_existing {
+                        if connected_users.values().any(|u| u == &username) {
+                            res = LoginOneshotCommand::Failed("Already logged in.".to_string());
+                        } else {
+                            println!("Logged in: {}", username);
+                            res = LoginOneshotCommand::Success(username.clone());
+                        }
+                    } else {
+                        res = LoginOneshotCommand::Failed("Incorrect password".to_string());
+                    }
+                } else {
+                    accounts.insert(username.clone(), pass_hash);
+                    println!("New account: {}", username);
+                    res = LoginOneshotCommand::Success(username.clone());
+                }
+                if let LoginOneshotCommand::Success(_) = res {
+                    connected_users.insert(addr, username);
+                } else {
+                    println!("Logged in: {}", username);
+                }
+                otx.send(res).unwrap();
+            }
+            UserJoined(username) => {
                 for tx_ in txs.values() {
                     tx_.send(ServerConnectionCommands::Write(
                         ClientboundPacket::UserJoined(username.clone()),
@@ -60,11 +96,12 @@ async fn channel_loop(mut receiver: Receiver<ChannelCommands>) {
                     .await
                     .ok();
                 }
-                usernames.insert(addr, username);
             }
             UserLeft(addr) => {
                 println!("Connection ended from: {}", addr);
-                let username = usernames.remove(&addr).unwrap_or_else(|| "".to_string());
+                let username = connected_users
+                    .remove(&addr)
+                    .unwrap_or_else(|| "".to_string());
                 txs.remove(&addr);
                 for tx_ in txs.values() {
                     tx_.send(ServerConnectionCommands::Write(
@@ -79,7 +116,7 @@ async fn channel_loop(mut receiver: Receiver<ChannelCommands>) {
                     .get(&addr)
                     .unwrap_or_else(|| panic!("Wrong reply addr: {}", addr));
                 tx.send(ServerConnectionCommands::Write(
-                    ClientboundPacket::UsersOnline(usernames.values().cloned().collect()),
+                    ClientboundPacket::UsersOnline(connected_users.values().cloned().collect()),
                 ))
                 .await
                 .unwrap();
@@ -101,46 +138,58 @@ async fn reading_loop(
             Ok(p) => {
                 println!("Got packet: {:?}", p);
                 if let Some(p) = p {
+                    //TODO: cleanup what is behind authentication
                     match p {
+                        // ping
                         ServerboundPacket::Ping => {
+                            // pong
                             let com = ServerConnectionCommands::Write(ClientboundPacket::Pong);
                             connection_sender.send(com).await.unwrap();
                         }
+                        // User wants to send a message
                         ServerboundPacket::Message(m) => {
-                            let p = ClientboundPacket::Message {
-                                text: m,
-                                sender: username
-                                    .clone()
-                                    .expect("Not logged in user tried to send a message"),
-                                time: current_time_as_sec(),
-                            };
-                            channel_sender
-                                .send(ChannelCommands::Write(p))
-                                .await
-                                .unwrap();
-                        }
-                        ServerboundPacket::Command(command) => match command.as_str() {
-                            "list" => {
-                                channel_sender
-                                    .send(ChannelCommands::UsersQuery(addr))
-                                    .await
-                                    .unwrap();
-                            }
-                            c => {
+                            if username.is_some() && verify_message(&m) {
                                 let p = ClientboundPacket::Message {
-                                    text: format!("Unknown command: {}", c),
-                                    sender: "#SERVER#".to_string(),
+                                    text: m,
+                                    sender: username.clone().unwrap(),
                                     time: current_time_as_sec(),
                                 };
-                                connection_sender
-                                    .send(ServerConnectionCommands::Write(p))
+                                channel_sender
+                                    .send(ChannelCommands::Write(p))
                                     .await
                                     .unwrap();
+                            } else {
+                                println!("Invalid message from {:?}: {}", username, m);
                             }
-                        },
+                        }
+                        // User issued a commend (i.e "/list")
+                        ServerboundPacket::Command(command) => {
+                            if username.is_some() {
+                                match command.as_str() {
+                                    "list" => {
+                                        channel_sender
+                                            .send(ChannelCommands::UsersQuery(addr))
+                                            .await
+                                            .unwrap();
+                                    }
+                                    c => {
+                                        let p = ClientboundPacket::Message {
+                                            text: format!("Unknown command: {}", c),
+                                            sender: "#SERVER#".to_string(),
+                                            time: current_time_as_sec(),
+                                        };
+                                        connection_sender
+                                            .send(ServerConnectionCommands::Write(p))
+                                            .await
+                                            .unwrap();
+                                    }
+                                }
+                            }
+                        }
+                        // User tries to log in
                         ServerboundPacket::Login {
                             username: un,
-                            password: _,
+                            password,
                         } => {
                             if username.is_some() {
                                 println!(
@@ -148,18 +197,44 @@ async fn reading_loop(
                                     un
                                 );
                             } else {
-                                println!("{} logged in", un);
-                                connection_sender
-                                    .send(ServerConnectionCommands::Write(
-                                        ClientboundPacket::LoginAck,
-                                    ))
-                                    .await
-                                    .unwrap();
+                                let (otx, orx) = oneshot::channel();
                                 channel_sender
-                                    .send(ChannelCommands::UserJoined(un.clone(), addr))
+                                    .send(ChannelCommands::LoginAttempt {
+                                        username: un.clone(),
+                                        password,
+                                        addr,
+                                        otx,
+                                    })
                                     .await
                                     .unwrap();
-                                username = Some(un);
+                                match orx.await.unwrap() {
+                                    LoginOneshotCommand::Success(un) => {
+                                        connection_sender
+                                            .send(ServerConnectionCommands::Write(
+                                                ClientboundPacket::LoginAck,
+                                            ))
+                                            .await
+                                            .unwrap();
+                                        channel_sender
+                                            .send(ChannelCommands::UserJoined(un.clone()))
+                                            .await
+                                            .unwrap();
+                                        username = Some(un);
+                                    }
+                                    LoginOneshotCommand::Failed(m) => {
+                                        connection_sender
+                                            .send(ServerConnectionCommands::Write(
+                                                ClientboundPacket::LoginFailed(m),
+                                            ))
+                                            .await
+                                            .unwrap();
+                                        connection_sender
+                                            .send(ServerConnectionCommands::Close)
+                                            .await
+                                            .unwrap();
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -195,6 +270,7 @@ async fn writing_loop(
     }
 }
 
+/// Current time since unix epoch in seconds
 #[inline]
 fn current_time_as_sec() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -202,4 +278,14 @@ fn current_time_as_sec() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+#[inline]
+fn hash_password<T: AsRef<[u8]>>(pass: T) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(pass);
+    let mut ret = [0; 32];
+    ret.copy_from_slice(&hasher.finalize()[..32]);
+    ret
 }

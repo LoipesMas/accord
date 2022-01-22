@@ -1,6 +1,8 @@
 use accord::packets::*;
 use std::net::SocketAddr;
 
+use tokio::sync::oneshot::Sender;
+
 #[derive(Debug)]
 pub enum ServerConnectionCommands {
     Write(ClientboundPacket),
@@ -14,7 +16,19 @@ pub enum ChannelCommands {
         tokio::sync::mpsc::Sender<ServerConnectionCommands>,
         SocketAddr,
     ),
-    UserJoined(String, SocketAddr),
+    LoginAttempt {
+        username: String,
+        password: String,
+        addr: SocketAddr,
+        otx: Sender<LoginOneshotCommand>,
+    },
+    UserJoined(String),
     UserLeft(SocketAddr),
     UsersQuery(SocketAddr),
+}
+
+#[derive(Debug)]
+pub enum LoginOneshotCommand {
+    Success(String),
+    Failed(String),
 }

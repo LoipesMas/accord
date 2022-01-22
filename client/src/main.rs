@@ -28,12 +28,28 @@ async fn main() {
             Ok(0 | 1) => println!("Username can't be empty!"),
             Ok(l) => {
                 if l > 18 {
-                   println!("Username too long. (Max 17 characters)");
-                   continue;
+                    println!("Username too long. (Max 17 characters)");
+                    continue;
                 }
                 let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
-                if s.chars().any(|c| !c.is_alphanumeric()){
-                   println!("Invalid characters in username.");
+                if s.chars().any(|c| !c.is_alphanumeric()) {
+                    println!("Invalid characters in username.");
+                } else {
+                    break s;
+                }
+            }
+            Err(e) => println!("Error: {:?}", e),
+        };
+    };
+    let password = loop {
+        println!("Password:");
+        let mut buf = bytes::BytesMut::new();
+        match stdio.read_buf(&mut buf).await {
+            Ok(0 | 1) => println!("Password can't be empty!"),
+            Ok(_) => {
+                let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
+                if s.chars().any(|c| !c.is_alphanumeric()) {
+                    println!("Invalid characters in password.");
                 } else {
                     break s;
                 }
@@ -50,10 +66,7 @@ async fn main() {
     let (mut reader, mut writer) = connection.split();
     println!("Logging in...");
     writer
-        .write_packet(ServerboundPacket::Login {
-            username,
-            password: "".to_string(),
-        })
+        .write_packet(ServerboundPacket::Login { username, password })
         .await
         .unwrap();
 
@@ -61,6 +74,9 @@ async fn main() {
         match p {
             ClientboundPacket::LoginAck => {
                 println!("Login succesful");
+            }
+            ClientboundPacket::LoginFailed(m) => {
+                println!("{}", m);
             }
             _ => {
                 println!("Login failed. Server response: {:?}", p);
@@ -129,25 +145,31 @@ async fn writing_loop(
     let mut stdio = tokio::io::stdin();
     let mut buf = bytes::BytesMut::new();
     loop {
-        buf.clear();
         tokio::select!(
             r = stdio.read_buf(&mut buf) => {
                 if r.is_ok() {
-                    let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
-                    if s.chars().any(|c| c.is_control()) {
-                        println!("Invalid message text!");
-                        continue;
-                    }
+                    let s = String::from_utf8_lossy(&buf).to_string();
 
-                    if !s.is_empty() {
+                    if let Some(s) = s.strip_suffix('\n') {
+                        buf.clear();
+                        print!("\r\u{1b}[A");
+                        if s.chars().any(|c| c.is_control()) {
+                            println!("Invalid message text!");
+                            continue;
+                        }
+
+                        if s.is_empty() {
+                            print!("\u{1b}[A\u{1b}[A");
+                            continue;
+                        }
+
                         let p = if let Some(command) = s.strip_prefix('/') {
                             ServerboundPacket::Command(command.to_string())
                         } else {
-                            ServerboundPacket::Message(s)
+                            ServerboundPacket::Message(s.to_string())
                         };
                         writer.write_packet(p).await.unwrap();
                         // Clear input line
-                        print!("\r\u{1b}[A");
                     }
                 }
             }

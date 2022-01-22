@@ -33,6 +33,7 @@ impl Packet for ServerboundPacket {
 pub enum ClientboundPacket {
     Pong,
     LoginAck,
+    LoginFailed(String),
     UserJoined(String),
     UserLeft(String),
     UsersOnline(Vec<String>),
