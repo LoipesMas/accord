@@ -11,6 +11,10 @@ use accord::utils::{verify_message, verify_username};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
 
+//TODO: restructure, maybe use structs for channel etc.
+//TODO: use logging crate?
+//TODO: encryption?
+
 #[tokio::main]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:".to_string() + accord::DEFAULT_PORT)
@@ -138,53 +142,12 @@ async fn reading_loop(
             Ok(p) => {
                 println!("Got packet: {:?}", p);
                 if let Some(p) = p {
-                    //TODO: cleanup what is behind authentication
                     match p {
                         // ping
                         ServerboundPacket::Ping => {
                             // pong
                             let com = ServerConnectionCommands::Write(ClientboundPacket::Pong);
                             connection_sender.send(com).await.unwrap();
-                        }
-                        // User wants to send a message
-                        ServerboundPacket::Message(m) => {
-                            if username.is_some() && verify_message(&m) {
-                                let p = ClientboundPacket::Message {
-                                    text: m,
-                                    sender: username.clone().unwrap(),
-                                    time: current_time_as_sec(),
-                                };
-                                channel_sender
-                                    .send(ChannelCommands::Write(p))
-                                    .await
-                                    .unwrap();
-                            } else {
-                                println!("Invalid message from {:?}: {}", username, m);
-                            }
-                        }
-                        // User issued a commend (i.e "/list")
-                        ServerboundPacket::Command(command) => {
-                            if username.is_some() {
-                                match command.as_str() {
-                                    "list" => {
-                                        channel_sender
-                                            .send(ChannelCommands::UsersQuery(addr))
-                                            .await
-                                            .unwrap();
-                                    }
-                                    c => {
-                                        let p = ClientboundPacket::Message {
-                                            text: format!("Unknown command: {}", c),
-                                            sender: "#SERVER#".to_string(),
-                                            time: current_time_as_sec(),
-                                        };
-                                        connection_sender
-                                            .send(ServerConnectionCommands::Write(p))
-                                            .await
-                                            .unwrap();
-                                    }
-                                }
-                            }
                         }
                         // User tries to log in
                         ServerboundPacket::Login {
@@ -235,6 +198,54 @@ async fn reading_loop(
                                         break;
                                     }
                                 }
+                            }
+                        }
+                        // rest is only for logged in users
+                        p => {
+                            if username.is_some() {
+                                match p {
+                                    // User wants to send a message
+                                    ServerboundPacket::Message(m) => {
+                                        if verify_message(&m) {
+                                            let p = ClientboundPacket::Message {
+                                                text: m,
+                                                sender: username.clone().unwrap(),
+                                                time: current_time_as_sec(),
+                                            };
+                                            channel_sender
+                                                .send(ChannelCommands::Write(p))
+                                                .await
+                                                .unwrap();
+                                        } else {
+                                            println!("Invalid message from {:?}: {}", username, m);
+                                        }
+                                    }
+                                    // User issued a commend (i.e "/list")
+                                    ServerboundPacket::Command(command) => match command.as_str() {
+                                        "list" => {
+                                            channel_sender
+                                                .send(ChannelCommands::UsersQuery(addr))
+                                                .await
+                                                .unwrap();
+                                        }
+                                        c => {
+                                            let p = ClientboundPacket::Message {
+                                                text: format!("Unknown command: {}", c),
+                                                sender: "#SERVER#".to_string(),
+                                                time: current_time_as_sec(),
+                                            };
+                                            connection_sender
+                                                .send(ServerConnectionCommands::Write(p))
+                                                .await
+                                                .unwrap();
+                                        }
+                                    },
+                                    p => {
+                                        unreachable!("{:?} should have been handled!", p);
+                                    }
+                                }
+                            } else {
+                                println!("Someone tried to do something without being logged in");
                             }
                         }
                     }
