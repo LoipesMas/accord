@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use tokio::sync::oneshot::Sender;
 
 #[derive(Debug)]
-pub enum ServerConnectionCommands {
+pub enum ConnectionCommands {
     Write(ClientboundPacket),
     Close,
 }
@@ -12,10 +12,7 @@ pub enum ServerConnectionCommands {
 #[derive(Debug)]
 pub enum ChannelCommands {
     Write(ClientboundPacket),
-    NewConnection(
-        tokio::sync::mpsc::Sender<ServerConnectionCommands>,
-        SocketAddr,
-    ),
+    NewConnection(tokio::sync::mpsc::Sender<ConnectionCommands>, SocketAddr),
     LoginAttempt {
         username: String,
         password: String,

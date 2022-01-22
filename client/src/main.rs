@@ -64,12 +64,14 @@ async fn main() {
     println!("Connected!");
     let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
     let (mut reader, mut writer) = connection.split();
+    tokio::time::sleep(std::time::Duration::new(5, 0)).await;
     println!("Logging in...");
     writer
         .write_packet(ServerboundPacket::Login { username, password })
         .await
         .unwrap();
 
+    // Next packet must be login related
     if let Ok(Some(p)) = reader.read_packet().await {
         match p {
             ClientboundPacket::LoginAck => {
