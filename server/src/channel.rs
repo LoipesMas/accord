@@ -63,17 +63,15 @@ impl AccordChannel {
                 }
                 UserLeft(addr) => {
                     println!("Connection ended from: {}", addr);
-                    let username = self
-                        .connected_users
-                        .remove(&addr)
-                        .unwrap_or_else(|| "".to_string());
                     self.txs.remove(&addr);
-                    for tx_ in self.txs.values() {
-                        tx_.send(ConnectionCommands::Write(ClientboundPacket::UserLeft(
-                            username.clone(),
-                        )))
-                        .await
-                        .ok();
+                    if let Some(username) = self.connected_users.remove(&addr) {
+                        for tx_ in self.txs.values() {
+                            tx_.send(ConnectionCommands::Write(ClientboundPacket::UserLeft(
+                                username.clone(),
+                            )))
+                            .await
+                            .ok();
+                        }
                     }
                 }
                 UsersQuery(addr) => {
