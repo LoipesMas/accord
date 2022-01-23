@@ -7,6 +7,8 @@ use accord_server::connection::ConnectionWrapper;
 
 //TODO: use logging crate?
 //TODO: encryption?
+//TODO: persistent account storage?
+//TODO: message history?
 
 #[tokio::main]
 async fn main() {
