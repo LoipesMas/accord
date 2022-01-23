@@ -8,9 +8,11 @@ pub trait Packet {
         Self: std::marker::Sized;
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ServerboundPacket {
     Ping,
+    EncryptionRequest,
+    EncryptionConfirm(Vec<u8>, Vec<u8>), // encrypted secret and token
     Login { username: String, password: String },
     Message(String),
     Command(String),
@@ -29,9 +31,11 @@ impl Packet for ServerboundPacket {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ClientboundPacket {
     Pong,
+    EncryptionResponse(Vec<u8>, Vec<u8>), // channel's public key and token
+    EncryptionAck,
     LoginAck,
     LoginFailed(String),
     UserJoined(String),

@@ -1,10 +1,15 @@
 use accord::packets::*;
 use accord::utils::verify_username;
+use accord::{ENC_TOK_LEN, RSA_BITS};
 
 use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::commands::*;
+
+use rand::rngs::OsRng;
+use rand::Rng;
+use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
 #[derive(Debug)]
 pub struct AccordChannel {
@@ -12,6 +17,8 @@ pub struct AccordChannel {
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommands>>,
     connected_users: HashMap<std::net::SocketAddr, String>,
     accounts: HashMap<String, [u8; 32]>,
+    priv_key: RsaPrivateKey,
+    pub_key: RsaPublicKey,
 }
 
 impl AccordChannel {
@@ -20,11 +27,16 @@ impl AccordChannel {
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommands>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
         let accounts: HashMap<String, [u8; 32]> = HashMap::new();
+        let mut rng = OsRng;
+        let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
+        let pub_key = RsaPublicKey::from(&priv_key);
         let s = Self {
             receiver,
             txs,
             connected_users,
             accounts,
+            priv_key,
+            pub_key,
         };
         // Launch channel loop
         tokio::spawn(s.channel_loop());
@@ -35,10 +47,6 @@ impl AccordChannel {
             use ChannelCommands::*;
             let p = self.receiver.recv().await.unwrap();
             match p {
-                NewConnection(tx, addr) => {
-                    println!("Connection from: {:?}", addr);
-                    self.txs.insert(addr, tx);
-                }
                 Write(p) => {
                     println!("Message: {:?}", &p);
                     for (addr, tx_) in &self.txs {
@@ -47,6 +55,50 @@ impl AccordChannel {
                         if self.connected_users.contains_key(addr) {
                             tx_.send(ConnectionCommands::Write(p.clone())).await.ok();
                         }
+                    }
+                }
+                NewConnection(tx, addr) => {
+                    println!("Connection from: {:?}", addr);
+                    self.txs.insert(addr, tx);
+                }
+                EncryptionRequest(tx, otx) => {
+                    let mut token = [0u8; ENC_TOK_LEN];
+                    OsRng.fill(&mut token);
+                    tx.send(ConnectionCommands::Write(
+                        ClientboundPacket::EncryptionResponse(
+                            self.pub_key.to_public_key_der().unwrap().as_ref().to_vec(),
+                            token.to_vec(),
+                        ),
+                    ))
+                    .await
+                    .unwrap();
+                    otx.send(token.to_vec()).unwrap();
+                }
+                EncryptionConfirm(tx, otx, enc_s, enc_t, exp_t) => {
+                    let t = {
+                        let padding = PaddingScheme::new_pkcs1v15_encrypt();
+                        self.priv_key
+                            .decrypt(padding, &enc_t)
+                            .expect("failed to decrypt")
+                    };
+                    if t != exp_t {
+                        println!("Encryption handshake failed!");
+                        tx.send(ConnectionCommands::Close).await.ok();
+                        otx.send(Err(())).unwrap();
+                    } else {
+                        let s = {
+                            let padding = PaddingScheme::new_pkcs1v15_encrypt();
+                            self.priv_key
+                                .decrypt(padding, &enc_s)
+                                .expect("failed to decrypt")
+                        };
+                        otx.send(Ok(s.clone())).unwrap();
+                        tx.send(ConnectionCommands::SetSecret(Some(s.clone())))
+                            .await
+                            .unwrap();
+                        tx.send(ConnectionCommands::Write(ClientboundPacket::EncryptionAck))
+                            .await
+                            .unwrap();
                     }
                 }
                 LoginAttempt { .. } => {

@@ -11,3 +11,6 @@ accord = {path = ".."}
 tokio = {version = "1.15.0", features = ["full"]}
 bytes = "1.1"
 chrono = "0.4.19"
+rsa = "0.5.0"
+rand = "0.8.4"
+rand_chacha = "0.3.1"

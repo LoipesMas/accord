@@ -5,6 +5,9 @@ use accord::utils::verify_message;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::oneshot;
 
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+
 // Maybe this shouldn't be a struct?
 pub struct ConnectionWrapper;
 
@@ -24,6 +27,7 @@ impl ConnectionWrapper {
         tokio::spawn(Self::writing_loop(writer, rx));
     }
 
+    // TODO: clean this up
     async fn reading_loop(
         mut reader: ConnectionReader<ServerboundPacket>,
         addr: std::net::SocketAddr,
@@ -31,9 +35,11 @@ impl ConnectionWrapper {
         channel_sender: Sender<ChannelCommands>,
     ) {
         let mut username = None;
+        let mut secret = None;
+        let mut nonce_generator = None;
         loop {
             println!("reading packet");
-            match reader.read_packet().await {
+            match reader.read_packet(&secret, nonce_generator.as_mut()).await {
                 Ok(p) => {
                     println!("Got packet: {:?}", p);
                     if let Some(p) = p {
@@ -94,6 +100,64 @@ impl ConnectionWrapper {
                                         }
                                     }
                                 }
+                            }
+                            ServerboundPacket::EncryptionRequest => {
+                                let (otx, orx) = oneshot::channel();
+                                channel_sender
+                                    .send(ChannelCommands::EncryptionRequest(
+                                        connection_sender.clone(),
+                                        otx,
+                                    ))
+                                    .await
+                                    .unwrap();
+                                let expect_token = orx.await.unwrap();
+                                match reader.read_packet(&secret, nonce_generator.as_mut()).await {
+                                    Ok(Some(ServerboundPacket::EncryptionConfirm(s, t))) => {
+                                        let (otx, orx) = oneshot::channel();
+                                        channel_sender
+                                            .send(ChannelCommands::EncryptionConfirm(
+                                                connection_sender.clone(),
+                                                otx,
+                                                s.clone(),
+                                                t,
+                                                expect_token,
+                                            ))
+                                            .await
+                                            .unwrap();
+                                        match orx.await.unwrap() {
+                                            Ok(s) => {
+                                                secret = Some(s.clone());
+                                                let mut seed = [0u8; accord::SECRET_LEN];
+                                                seed.copy_from_slice(&s);
+
+                                                nonce_generator =
+                                                    Some(ChaCha20Rng::from_seed(seed));
+                                            }
+                                            Err(_) => {
+                                                connection_sender
+                                                    .send(ConnectionCommands::Close)
+                                                    .await
+                                                    .ok(); // it's ok if already closed
+                                            }
+                                        }
+                                    }
+                                    Ok(_) => {
+                                        println!(
+                                            "Client sent wrong packet during encryption handshake."
+                                        );
+                                        connection_sender
+                                            .send(ConnectionCommands::Close)
+                                            .await
+                                            .ok(); // it's ok if already closed
+                                    }
+                                    Err(_) => {
+                                        println!("Error during encryption handshake.");
+                                        connection_sender
+                                            .send(ConnectionCommands::Close)
+                                            .await
+                                            .ok(); // it's ok if already closed
+                                    }
+                                };
                             }
                             // rest is only for logged in users
                             p => {
@@ -158,10 +222,7 @@ impl ConnectionWrapper {
                         .send(ChannelCommands::UserLeft(addr))
                         .await
                         .unwrap();
-                    connection_sender
-                        .send(ConnectionCommands::Close)
-                        .await
-                        .unwrap();
+                    connection_sender.send(ConnectionCommands::Close).await.ok(); // it's ok if already closed
                     println!("Err: {:?}", e);
                     break;
                 }
@@ -172,12 +233,24 @@ impl ConnectionWrapper {
         mut writer: ConnectionWriter<ClientboundPacket>,
         mut connection_receiver: Receiver<ConnectionCommands>,
     ) {
+        let mut secret = None;
+        let mut nonce_generator = None;
         loop {
             if let Some(com) = connection_receiver.recv().await {
                 use ConnectionCommands::*;
                 match com {
                     Close => break,
-                    Write(p) => writer.write_packet(p).await.unwrap(),
+                    SetSecret(s) => {
+                        secret = s.clone();
+                        let mut seed = [0u8; accord::SECRET_LEN];
+                        seed.copy_from_slice(&s.unwrap());
+
+                        nonce_generator = Some(ChaCha20Rng::from_seed(seed));
+                    }
+                    Write(p) => writer
+                        .write_packet(p, &secret, nonce_generator.as_mut())
+                        .await
+                        .unwrap(),
                 }
             }
         }

@@ -1,0 +1,11 @@
+Server generates public+private key on startup (rsa)
+
+Client request encryption
+Server responds with public key and token
+Client generates secret
+Client sends encrypted secret and token
+Server decrypts secret and token and verifies token
+If it checks out, everything from this point on is encrypted
+Nonce generators are initialized on both ends with the secret as seed
+Server sends encrypted acknowledgement
+Login commences

@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use accord_server::channel::AccordChannel;
 use accord_server::connection::ConnectionWrapper;
 
+//TODO: pad message for security/privacy (so length isn't obvious)?
 //TODO: use logging crate?
-//TODO: encryption?
 //TODO: persistent account storage?
 //TODO: message history?
 
