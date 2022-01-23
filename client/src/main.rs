@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 
 use tokio::sync::oneshot;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let mut args = std::env::args();
     let addr = SocketAddr::from_str(&format!(
@@ -64,7 +64,6 @@ async fn main() {
     println!("Connected!");
     let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
     let (mut reader, mut writer) = connection.split();
-    tokio::time::sleep(std::time::Duration::new(5, 0)).await;
     println!("Logging in...");
     writer
         .write_packet(ServerboundPacket::Login { username, password })
