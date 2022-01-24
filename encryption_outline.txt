@@ -9,3 +9,5 @@ If it checks out, everything from this point on is encrypted
 Nonce generators are initialized on both ends with the secret as seed
 Server sends encrypted acknowledgement
 Login commences
+
+If the client doesn't send encryption request then encryption isn't enabled
