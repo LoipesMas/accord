@@ -33,6 +33,101 @@ async fn main() {
         accord::DEFAULT_PORT
     ))
     .unwrap();
+    println!("Connecting to: {}", addr);
+    let socket = TcpStream::connect(addr).await.unwrap();
+
+    println!("Connected!");
+    let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
+    let (mut reader, mut writer) = connection.split();
+
+    //==================================
+    //      Encryption
+    //==================================
+    println!("Establishing encryption...");
+    let secret = None;
+    let mut nonce_generator_write = None;
+    let mut nonce_generator_read = None;
+
+    // Request encryption
+    writer
+        .write_packet(
+            ServerboundPacket::EncryptionRequest,
+            &secret,
+            nonce_generator_write.as_mut(),
+        )
+        .await
+        .unwrap();
+
+    // Handle encryption response
+    let pub_key: rsa::RsaPublicKey;
+    let token;
+    if let Ok(Some(p)) = reader
+        .read_packet(&secret, nonce_generator_read.as_mut())
+        .await
+    {
+        match p {
+            ClientboundPacket::EncryptionResponse(pub_key_der, token_) => {
+                println!("Encryption step 1 successful");
+                pub_key = rsa::pkcs8::FromPublicKey::from_public_key_der(&pub_key_der).unwrap();
+                assert_eq!(ENC_TOK_LEN, token_.len());
+                token = token_;
+            }
+            _ => {
+                println!("Encryption failed. Server response: {:?}", p);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("Failed to establish encryption");
+        std::process::exit(1);
+    }
+
+    // Generate secret
+    let mut secret = [0u8; SECRET_LEN];
+    OsRng.fill(&mut secret);
+
+    // Encrypt and send
+    let padding = PaddingScheme::new_pkcs1v15_encrypt();
+    let enc_secret = pub_key
+        .encrypt(&mut OsRng, padding, &secret[..])
+        .expect("failed to encrypt");
+    let padding = PaddingScheme::new_pkcs1v15_encrypt();
+    let enc_token = pub_key
+        .encrypt(&mut OsRng, padding, &token[..])
+        .expect("failed to encrypt");
+    writer
+        .write_packet(
+            ServerboundPacket::EncryptionConfirm(enc_secret, enc_token),
+            &None,
+            nonce_generator_write.as_mut(),
+        )
+        .await
+        .unwrap();
+
+    // From this point onward we assume everything is encrypted
+    let secret = Some(secret.to_vec());
+    let mut seed = [0u8; accord::SECRET_LEN];
+    seed.copy_from_slice(&secret.as_ref().unwrap()[..]);
+    nonce_generator_write = Some(ChaCha20Rng::from_seed(seed));
+    nonce_generator_read = Some(ChaCha20Rng::from_seed(seed));
+
+    // Expect EncryptionAck (should be encrypted)
+    let p = reader
+        .read_packet(&secret, nonce_generator_read.as_mut())
+        .await;
+    match p {
+        Ok(Some(ClientboundPacket::EncryptionAck)) => {
+            println!("Encryption handshake successful!");
+        }
+        Ok(_) => {
+            println!("Failed encryption step 2. Server response: {:?}", p);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            println!("{}", e);
+            std::process::exit(1);
+        }
+    }
 
     //==================================
     //      Get credentials
@@ -74,97 +169,6 @@ async fn main() {
             Err(e) => println!("Error: {:?}", e),
         };
     };
-    println!("Hello {}!", username);
-    println!("Connecting to: {}", addr);
-    let socket = TcpStream::connect(addr).await.unwrap();
-
-    println!("Connected!");
-    let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
-    let (mut reader, mut writer) = connection.split();
-
-    //==================================
-    //      Encryption
-    //==================================
-    println!("Establishing encryption...");
-    let secret = None;
-    let mut nonce_generator_write = None;
-    let mut nonce_generator_read = None;
-    // Request encryption
-    writer
-        .write_packet(
-            ServerboundPacket::EncryptionRequest,
-            &secret,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
-
-    // Handle encryption response
-    let pub_key: rsa::RsaPublicKey;
-    let token;
-    if let Ok(Some(p)) = reader
-        .read_packet(&secret, nonce_generator_read.as_mut())
-        .await
-    {
-        match p {
-            ClientboundPacket::EncryptionResponse(pub_key_der, token_) => {
-                println!("Encryption step 1 successful");
-                pub_key = rsa::pkcs8::FromPublicKey::from_public_key_der(&pub_key_der).unwrap();
-                assert_eq!(ENC_TOK_LEN, token_.len());
-                token = token_;
-            }
-            _ => {
-                println!("Encryption failed. Server response: {:?}", p);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        println!("Failed to establish encryption");
-        std::process::exit(1);
-    }
-    // Generate secret
-    let mut secret = [0u8; SECRET_LEN];
-    OsRng.fill(&mut secret);
-    // Encrypt and send
-    let padding = PaddingScheme::new_pkcs1v15_encrypt();
-    let enc_secret = pub_key
-        .encrypt(&mut OsRng, padding, &secret[..])
-        .expect("failed to encrypt");
-    let padding = PaddingScheme::new_pkcs1v15_encrypt();
-    let enc_token = pub_key
-        .encrypt(&mut OsRng, padding, &token[..])
-        .expect("failed to encrypt");
-    writer
-        .write_packet(
-            ServerboundPacket::EncryptionConfirm(enc_secret, enc_token),
-            &None,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
-    let secret = Some(secret.to_vec());
-    let mut seed = [0u8; accord::SECRET_LEN];
-    seed.copy_from_slice(&secret.as_ref().unwrap()[..]);
-    nonce_generator_write = Some(ChaCha20Rng::from_seed(seed));
-    nonce_generator_read = Some(ChaCha20Rng::from_seed(seed));
-
-    // Expect EncryptionAck (should be encrypted)
-    let p = reader
-        .read_packet(&secret, nonce_generator_read.as_mut())
-        .await;
-    match p {
-        Ok(Some(ClientboundPacket::EncryptionAck)) => {
-            println!("Encryption handshake successful!");
-        }
-        Ok(_) => {
-            println!("Failed encryption step 2. Server response: {:?}", p);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            println!("{}", e);
-            std::process::exit(1);
-        }
-    }
 
     //==================================
     //      Login
