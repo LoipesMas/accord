@@ -60,8 +60,7 @@ async fn main() {
 
     // Handle encryption response
     let pub_key: rsa::RsaPublicKey;
-    let token;
-    if let Ok(Some(p)) = reader
+    let token = if let Ok(Some(p)) = reader
         .read_packet(&secret, nonce_generator_read.as_mut())
         .await
     {
@@ -70,17 +69,17 @@ async fn main() {
                 println!("Encryption step 1 successful");
                 pub_key = rsa::pkcs8::FromPublicKey::from_public_key_der(&pub_key_der).unwrap();
                 assert_eq!(ENC_TOK_LEN, token_.len());
-                token = token_;
+                token_
             }
             _ => {
                 println!("Encryption failed. Server response: {:?}", p);
-                std::process::exit(1);
+                std::process::exit(1)
             }
         }
     } else {
         println!("Failed to establish encryption");
-        std::process::exit(1);
-    }
+        std::process::exit(1)
+    };
 
     // Generate secret
     let mut secret = [0u8; SECRET_LEN];

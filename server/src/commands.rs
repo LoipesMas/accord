@@ -1,23 +1,23 @@
+/// Commands used internally for communication between connections and channel loop
 use accord::packets::*;
 use std::net::SocketAddr;
 
 use tokio::sync::{mpsc::Sender, oneshot::Sender as OSender};
 
 #[derive(Debug)]
-pub enum ConnectionCommands {
+pub enum ConnectionCommand {
     Write(ClientboundPacket),
     SetSecret(Option<Vec<u8>>),
     Close,
 }
 
 #[derive(Debug)]
-pub enum ChannelCommands {
+pub enum ChannelCommand {
     Write(ClientboundPacket),
-    NewConnection(Sender<ConnectionCommands>, SocketAddr),
-    EncryptionRequest(Sender<ConnectionCommands>, OSender<Vec<u8>>),
+    EncryptionRequest(Sender<ConnectionCommand>, OSender<Vec<u8>>),
     // Maybe this should be a struct?
     EncryptionConfirm(
-        Sender<ConnectionCommands>,
+        Sender<ConnectionCommand>,
         OSender<Result<Vec<u8>, ()>>,
         Vec<u8>,
         Vec<u8>,
@@ -27,15 +27,12 @@ pub enum ChannelCommands {
         username: String,
         password: String,
         addr: SocketAddr,
-        otx: OSender<LoginOneshotCommand>,
+        otx: OSender<LoginResult>,
+        tx: Sender<ConnectionCommand>,
     },
     UserJoined(String),
     UserLeft(SocketAddr),
     UsersQuery(SocketAddr),
 }
 
-#[derive(Debug)]
-pub enum LoginOneshotCommand {
-    Success(String),
-    Failed(String),
-}
+pub type LoginResult = Result<String, String>;

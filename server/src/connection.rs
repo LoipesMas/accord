@@ -15,240 +15,290 @@ impl ConnectionWrapper {
     pub async fn spawn(
         socket: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
-        ctx: Sender<ChannelCommands>,
+        ctx: Sender<ChannelCommand>,
     ) {
-        let (tx, rx) = mpsc::channel::<ConnectionCommands>(32);
-        ctx.send(ChannelCommands::NewConnection(tx.clone(), addr))
-            .await
-            .unwrap();
+        let (tx, rx) = mpsc::channel::<ConnectionCommand>(32);
+        println!("Connection from: {:?}", addr);
         let connection = Connection::<ServerboundPacket, ClientboundPacket>::new(socket);
         let (reader, writer) = connection.split();
-        tokio::spawn(Self::reading_loop(reader, addr, tx, ctx));
-        tokio::spawn(Self::writing_loop(writer, rx));
+        let reader_wrapped = ConnectionReaderWrapper::new(reader, addr, tx, ctx);
+        tokio::spawn(reader_wrapped.spawn_loop());
+        let writer_wrapped = ConnectionWriterWrapper::new(writer, rx);
+        tokio::spawn(writer_wrapped.spawn_loop());
+    }
+}
+
+pub struct ConnectionReaderWrapper {
+    reader: ConnectionReader<ServerboundPacket>,
+    addr: std::net::SocketAddr,
+    connection_sender: Sender<ConnectionCommand>,
+    channel_sender: Sender<ChannelCommand>,
+    username: Option<String>,
+    secret: Option<Vec<u8>>,
+    nonce_generator: Option<ChaCha20Rng>,
+}
+
+impl ConnectionReaderWrapper {
+    fn new(
+        reader: ConnectionReader<ServerboundPacket>,
+        addr: std::net::SocketAddr,
+        connection_sender: Sender<ConnectionCommand>,
+        channel_sender: Sender<ChannelCommand>,
+    ) -> Self {
+        Self {
+            reader,
+            addr,
+            connection_sender,
+            channel_sender,
+            username: None,
+            secret: None,
+            nonce_generator: None,
+        }
     }
 
-    // TODO: clean this up
-    async fn reading_loop(
-        mut reader: ConnectionReader<ServerboundPacket>,
-        addr: std::net::SocketAddr,
-        connection_sender: Sender<ConnectionCommands>,
-        channel_sender: Sender<ChannelCommands>,
-    ) {
-        let mut username = None;
-        let mut secret = None;
-        let mut nonce_generator = None;
+    async fn handle_login(&mut self, un: String, password: String) {
+        let (otx, orx) = oneshot::channel();
+        self.channel_sender
+            .send(ChannelCommand::LoginAttempt {
+                username: un.clone(),
+                password,
+                addr: self.addr,
+                otx,
+                tx: self.connection_sender.clone(),
+            })
+            .await
+            .unwrap();
+        match orx.await.unwrap() {
+            Ok(un) => {
+                self.connection_sender
+                    .send(ConnectionCommand::Write(ClientboundPacket::LoginAck))
+                    .await
+                    .unwrap();
+                self.channel_sender
+                    .send(ChannelCommand::UserJoined(un.clone()))
+                    .await
+                    .unwrap();
+                self.username = Some(un);
+            }
+            Err(m) => {
+                self.connection_sender
+                    .send(ConnectionCommand::Write(ClientboundPacket::LoginFailed(m)))
+                    .await
+                    .unwrap();
+                self.connection_sender
+                    .send(ConnectionCommand::Close)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    async fn handle_encryption_request(&mut self) {
+        use ServerboundPacket::*;
+        // To send back the token
+        let (otx, orx) = oneshot::channel();
+        self.channel_sender
+            .send(ChannelCommand::EncryptionRequest(
+                self.connection_sender.clone(),
+                otx,
+            ))
+            .await
+            .unwrap();
+
+        let expect_token = orx.await.unwrap();
+
+        // Now we expect EncryptionConfirm with encrypted secret and token
+        match self
+            .reader
+            .read_packet(&self.secret, self.nonce_generator.as_mut())
+            .await
+        {
+            Ok(Some(EncryptionConfirm(s, t))) => {
+                let (otx, orx) = oneshot::channel();
+                self.channel_sender
+                    .send(ChannelCommand::EncryptionConfirm(
+                        self.connection_sender.clone(),
+                        otx,
+                        s.clone(),
+                        t,
+                        expect_token,
+                    ))
+                    .await
+                    .unwrap();
+
+                // Get decrypted secret back from channel
+                match orx.await.unwrap() {
+                    Ok(s) => {
+                        self.secret = Some(s.clone());
+                        let mut seed = [0u8; accord::SECRET_LEN];
+                        seed.copy_from_slice(&s);
+
+                        self.nonce_generator = Some(ChaCha20Rng::from_seed(seed));
+                    }
+                    Err(_) => {
+                        self.connection_sender
+                            .send(ConnectionCommand::Close)
+                            .await
+                            .ok(); // it's ok if already closed
+                    }
+                }
+            }
+            Ok(_) => {
+                println!("Client sent wrong packet during encryption handshake.");
+                self.connection_sender
+                    .send(ConnectionCommand::Close)
+                    .await
+                    .ok(); // it's ok if already closed
+            }
+            Err(_) => {
+                println!("Error during encryption handshake.");
+                self.connection_sender
+                    .send(ConnectionCommand::Close)
+                    .await
+                    .ok(); // it's ok if already closed
+            }
+        };
+    }
+
+    async fn handle_packet(&mut self, packet: ServerboundPacket) {
+        use ServerboundPacket::*;
+        match packet {
+            // ping
+            Ping => {
+                // pong
+                let com = ConnectionCommand::Write(ClientboundPacket::Pong);
+                self.connection_sender.send(com).await.unwrap();
+            }
+            // User tries to log in
+            Login {
+                username: un,
+                password,
+            } => {
+                if self.username.is_some() {
+                    println!("{} tried to log in while already logged in, ignoring.", un);
+                } else {
+                    self.handle_login(un, password).await;
+                }
+            }
+            // Users requests encryption
+            EncryptionRequest => self.handle_encryption_request().await,
+            // rest is only for logged in users
+            p => {
+                if self.username.is_some() {
+                    match p {
+                        // User wants to send a message
+                        Message(m) => {
+                            if verify_message(&m) {
+                                let p = ClientboundPacket::Message {
+                                    text: m,
+                                    sender: self.username.clone().unwrap(),
+                                    time: current_time_as_sec(),
+                                };
+                                self.channel_sender
+                                    .send(ChannelCommand::Write(p))
+                                    .await
+                                    .unwrap();
+                            } else {
+                                println!("Invalid message from {:?}: {}", self.username, m);
+                            }
+                        }
+                        // User issued a commend (i.e "/list")
+                        Command(command) => match command.as_str() {
+                            "list" => {
+                                self.channel_sender
+                                    .send(ChannelCommand::UsersQuery(self.addr))
+                                    .await
+                                    .unwrap();
+                            }
+                            c => {
+                                let p = ClientboundPacket::Message {
+                                    text: format!("Unknown command: {}", c),
+                                    sender: "#SERVER#".to_string(),
+                                    time: current_time_as_sec(),
+                                };
+                                self.connection_sender
+                                    .send(ConnectionCommand::Write(p))
+                                    .await
+                                    .unwrap();
+                            }
+                        },
+                        p => {
+                            unreachable!("{:?} should have been handled!", p);
+                        }
+                    }
+                } else {
+                    println!("Someone tried to do something without being logged in");
+                }
+            }
+        };
+    }
+
+    async fn spawn_loop(mut self) {
         loop {
             println!("reading packet");
-            match reader.read_packet(&secret, nonce_generator.as_mut()).await {
+            match self
+                .reader
+                .read_packet(&self.secret, self.nonce_generator.as_mut())
+                .await
+            {
                 Ok(p) => {
                     println!("Got packet: {:?}", p);
                     if let Some(p) = p {
-                        match p {
-                            // ping
-                            ServerboundPacket::Ping => {
-                                // pong
-                                let com = ConnectionCommands::Write(ClientboundPacket::Pong);
-                                connection_sender.send(com).await.unwrap();
-                            }
-                            // User tries to log in
-                            ServerboundPacket::Login {
-                                username: un,
-                                password,
-                            } => {
-                                if username.is_some() {
-                                    println!(
-                                        "{} tried to log in while already logged in, ignoring.",
-                                        un
-                                    );
-                                } else {
-                                    let (otx, orx) = oneshot::channel();
-                                    channel_sender
-                                        .send(ChannelCommands::LoginAttempt {
-                                            username: un.clone(),
-                                            password,
-                                            addr,
-                                            otx,
-                                        })
-                                        .await
-                                        .unwrap();
-                                    match orx.await.unwrap() {
-                                        LoginOneshotCommand::Success(un) => {
-                                            connection_sender
-                                                .send(ConnectionCommands::Write(
-                                                    ClientboundPacket::LoginAck,
-                                                ))
-                                                .await
-                                                .unwrap();
-                                            channel_sender
-                                                .send(ChannelCommands::UserJoined(un.clone()))
-                                                .await
-                                                .unwrap();
-                                            username = Some(un);
-                                        }
-                                        LoginOneshotCommand::Failed(m) => {
-                                            connection_sender
-                                                .send(ConnectionCommands::Write(
-                                                    ClientboundPacket::LoginFailed(m),
-                                                ))
-                                                .await
-                                                .unwrap();
-                                            connection_sender
-                                                .send(ConnectionCommands::Close)
-                                                .await
-                                                .unwrap();
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            ServerboundPacket::EncryptionRequest => {
-                                let (otx, orx) = oneshot::channel();
-                                channel_sender
-                                    .send(ChannelCommands::EncryptionRequest(
-                                        connection_sender.clone(),
-                                        otx,
-                                    ))
-                                    .await
-                                    .unwrap();
-                                let expect_token = orx.await.unwrap();
-                                match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-                                    Ok(Some(ServerboundPacket::EncryptionConfirm(s, t))) => {
-                                        let (otx, orx) = oneshot::channel();
-                                        channel_sender
-                                            .send(ChannelCommands::EncryptionConfirm(
-                                                connection_sender.clone(),
-                                                otx,
-                                                s.clone(),
-                                                t,
-                                                expect_token,
-                                            ))
-                                            .await
-                                            .unwrap();
-                                        match orx.await.unwrap() {
-                                            Ok(s) => {
-                                                secret = Some(s.clone());
-                                                let mut seed = [0u8; accord::SECRET_LEN];
-                                                seed.copy_from_slice(&s);
-
-                                                nonce_generator =
-                                                    Some(ChaCha20Rng::from_seed(seed));
-                                            }
-                                            Err(_) => {
-                                                connection_sender
-                                                    .send(ConnectionCommands::Close)
-                                                    .await
-                                                    .ok(); // it's ok if already closed
-                                            }
-                                        }
-                                    }
-                                    Ok(_) => {
-                                        println!(
-                                            "Client sent wrong packet during encryption handshake."
-                                        );
-                                        connection_sender
-                                            .send(ConnectionCommands::Close)
-                                            .await
-                                            .ok(); // it's ok if already closed
-                                    }
-                                    Err(_) => {
-                                        println!("Error during encryption handshake.");
-                                        connection_sender
-                                            .send(ConnectionCommands::Close)
-                                            .await
-                                            .ok(); // it's ok if already closed
-                                    }
-                                };
-                            }
-                            // rest is only for logged in users
-                            p => {
-                                if username.is_some() {
-                                    match p {
-                                        // User wants to send a message
-                                        ServerboundPacket::Message(m) => {
-                                            if verify_message(&m) {
-                                                let p = ClientboundPacket::Message {
-                                                    text: m,
-                                                    sender: username.clone().unwrap(),
-                                                    time: current_time_as_sec(),
-                                                };
-                                                channel_sender
-                                                    .send(ChannelCommands::Write(p))
-                                                    .await
-                                                    .unwrap();
-                                            } else {
-                                                println!(
-                                                    "Invalid message from {:?}: {}",
-                                                    username, m
-                                                );
-                                            }
-                                        }
-                                        // User issued a commend (i.e "/list")
-                                        ServerboundPacket::Command(command) => {
-                                            match command.as_str() {
-                                                "list" => {
-                                                    channel_sender
-                                                        .send(ChannelCommands::UsersQuery(addr))
-                                                        .await
-                                                        .unwrap();
-                                                }
-                                                c => {
-                                                    let p = ClientboundPacket::Message {
-                                                        text: format!("Unknown command: {}", c),
-                                                        sender: "#SERVER#".to_string(),
-                                                        time: current_time_as_sec(),
-                                                    };
-                                                    connection_sender
-                                                        .send(ConnectionCommands::Write(p))
-                                                        .await
-                                                        .unwrap();
-                                                }
-                                            }
-                                        }
-                                        p => {
-                                            unreachable!("{:?} should have been handled!", p);
-                                        }
-                                    }
-                                } else {
-                                    println!(
-                                        "Someone tried to do something without being logged in"
-                                    );
-                                }
-                            }
-                        }
+                        self.handle_packet(p).await;
                     }
                 }
                 Err(e) => {
-                    channel_sender
-                        .send(ChannelCommands::UserLeft(addr))
+                    self.channel_sender
+                        .send(ChannelCommand::UserLeft(self.addr))
                         .await
                         .unwrap();
-                    connection_sender.send(ConnectionCommands::Close).await.ok(); // it's ok if already closed
+                    self.connection_sender
+                        .send(ConnectionCommand::Close)
+                        .await
+                        .ok(); // it's ok if already closed
                     println!("Err: {:?}", e);
                     break;
                 }
             }
         }
     }
-    async fn writing_loop(
-        mut writer: ConnectionWriter<ClientboundPacket>,
-        mut connection_receiver: Receiver<ConnectionCommands>,
-    ) {
-        let mut secret = None;
-        let mut nonce_generator = None;
+}
+
+pub struct ConnectionWriterWrapper {
+    writer: ConnectionWriter<ClientboundPacket>,
+    connection_receiver: Receiver<ConnectionCommand>,
+    secret: Option<Vec<u8>>,
+    nonce_generator: Option<ChaCha20Rng>,
+}
+impl ConnectionWriterWrapper {
+    fn new(
+        writer: ConnectionWriter<ClientboundPacket>,
+        connection_receiver: Receiver<ConnectionCommand>,
+    ) -> Self {
+        Self {
+            writer,
+            connection_receiver,
+            secret: None,
+            nonce_generator: None,
+        }
+    }
+
+    async fn spawn_loop(mut self) {
         loop {
-            if let Some(com) = connection_receiver.recv().await {
-                use ConnectionCommands::*;
+            if let Some(com) = self.connection_receiver.recv().await {
+                use ConnectionCommand::*;
                 match com {
                     Close => break,
                     SetSecret(s) => {
-                        secret = s.clone();
+                        self.secret = s.clone();
                         let mut seed = [0u8; accord::SECRET_LEN];
                         seed.copy_from_slice(&s.unwrap());
 
-                        nonce_generator = Some(ChaCha20Rng::from_seed(seed));
+                        self.nonce_generator = Some(ChaCha20Rng::from_seed(seed));
                     }
-                    Write(p) => writer
-                        .write_packet(p, &secret, nonce_generator.as_mut())
+                    Write(p) => self
+                        .writer
+                        .write_packet(p, &self.secret, self.nonce_generator.as_mut())
                         .await
                         .unwrap(),
                 }

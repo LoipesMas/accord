@@ -132,10 +132,14 @@ mod encryption {
         XChaCha20Poly1305,
     };
 
-    use crate::{SECRET_LEN, NONCE_LEN};
+    use crate::{NONCE_LEN, SECRET_LEN};
 
     // [u8; n] -> [u8;n+4] (1st 4 bytes is len)
-    pub fn encrypt_frame(packet_bytes: &[u8], key: &[u8; SECRET_LEN], nonce: &[u8; NONCE_LEN]) -> Vec<u8> {
+    pub fn encrypt_frame(
+        packet_bytes: &[u8],
+        key: &[u8; SECRET_LEN],
+        nonce: &[u8; NONCE_LEN],
+    ) -> Vec<u8> {
         // This could some unsafe pointer magic to be more optimal
         let cipher = XChaCha20Poly1305::new(key.into());
         let len: u32 = packet_bytes.len().try_into().expect("Packet too big!");
@@ -181,7 +185,7 @@ fn read_be_u32(input: &mut &[u8]) -> u32 {
 mod test {
     use super::encryption::*;
     use crate::packets::*;
-    use crate::{SECRET_LEN, NONCE_LEN};
+    use crate::{NONCE_LEN, SECRET_LEN};
     #[test]
     fn encrypt_packet_test() {
         let key = [0u8; SECRET_LEN];
