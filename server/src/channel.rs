@@ -9,6 +9,9 @@ use super::commands::*;
 
 use rand::rngs::OsRng;
 use rand::Rng;
+use rand::RngCore;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
 #[derive(Debug)]
@@ -16,7 +19,8 @@ pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>>,
     connected_users: HashMap<std::net::SocketAddr, String>,
-    accounts: HashMap<String, [u8; 32]>,
+    salt_generator: ChaCha20Rng,
+    accounts: HashMap<String, Account>,
     priv_key: RsaPrivateKey,
     pub_key: RsaPublicKey,
 }
@@ -26,7 +30,7 @@ impl AccordChannel {
         // Setup
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
-        let accounts: HashMap<String, [u8; 32]> = HashMap::new();
+        let accounts = HashMap::new();
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
@@ -34,6 +38,7 @@ impl AccordChannel {
             receiver,
             txs,
             connected_users,
+            salt_generator: ChaCha20Rng::from_entropy(),
             accounts,
             priv_key,
             pub_key,
@@ -146,11 +151,12 @@ impl AccordChannel {
             tx,
         } = p
         {
-            let pass_hash = hash_password(password);
             let res = if !verify_username(&username) {
                 Err("Invalid username!".to_string())
-            } else if let Some(pass_hash_existing) = self.accounts.get(&username) {
-                if &pass_hash == pass_hash_existing {
+            } else if let Some(account) = self.accounts.get(&username) {
+                let salt = account.salt;
+                let pass_hash = hash_password(password, salt);
+                if pass_hash == account.password {
                     if self.connected_users.values().any(|u| u == &username) {
                         Err("Already logged in.".to_string())
                     } else {
@@ -161,7 +167,14 @@ impl AccordChannel {
                     Err("Incorrect password".to_string())
                 }
             } else {
-                self.accounts.insert(username.clone(), pass_hash);
+                let mut salt = [0; 64];
+                self.salt_generator.fill_bytes(&mut salt);
+                let pass_hash = hash_password(password, salt);
+                let account = Account {
+                    password: pass_hash,
+                    salt,
+                };
+                self.accounts.insert(username.clone(), account);
                 println!("New account: {}", username);
                 Ok(username.clone())
             };
@@ -178,11 +191,19 @@ impl AccordChannel {
     }
 }
 
+// Account will be indentified by username
+#[derive(Clone, Debug)]
+struct Account {
+    password: [u8; 32], // hashed with salt
+    salt: [u8; 64],
+}
+
 #[inline]
-fn hash_password<T: AsRef<[u8]>>(pass: T) -> [u8; 32] {
+fn hash_password<P: AsRef<[u8]>, S: AsRef<[u8]>>(pass: P, salt: S) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(pass);
+    hasher.update(salt);
     let mut ret = [0; 32];
     ret.copy_from_slice(&hasher.finalize()[..32]);
     ret
