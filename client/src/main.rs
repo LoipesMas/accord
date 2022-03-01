@@ -215,6 +215,16 @@ async fn main() {
         .await
         .unwrap();
 
+    // Get last 20 messages
+    writer
+        .write_packet(
+            ServerboundPacket::FetchMessages(0, 20),
+            &secret,
+            nonce_generator_write.as_mut(),
+        )
+        .await
+        .unwrap();
+
     // To send close command when tcpstream is closed
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -232,7 +242,7 @@ async fn reading_loop(
 ) {
     'l: loop {
         match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-            Ok(Some(ClientboundPacket::Message { text, sender, time })) => {
+            Ok(Some(ClientboundPacket::Message(Message { text, sender, time }))) => {
                 let time = chrono::Local.timestamp(time as i64, 0);
                 println!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text);
             }

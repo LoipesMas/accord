@@ -189,11 +189,11 @@ impl ConnectionReaderWrapper {
                         // User wants to send a message
                         Message(m) => {
                             if verify_message(&m) {
-                                let p = ClientboundPacket::Message {
+                                let p = ClientboundPacket::Message(accord::packets::Message {
                                     text: m,
                                     sender: self.username.clone().unwrap(),
                                     time: current_time_as_sec(),
-                                };
+                                });
                                 self.channel_sender
                                     .send(ChannelCommand::Write(p))
                                     .await
@@ -211,17 +211,31 @@ impl ConnectionReaderWrapper {
                                     .unwrap();
                             }
                             c => {
-                                let p = ClientboundPacket::Message {
+                                let p = ClientboundPacket::Message(accord::packets::Message {
                                     text: format!("Unknown command: {}", c),
                                     sender: "#SERVER#".to_string(),
                                     time: current_time_as_sec(),
-                                };
+                                });
                                 self.connection_sender
                                     .send(ConnectionCommand::Write(p))
                                     .await
                                     .unwrap();
                             }
                         },
+                        FetchMessages(o, n) => {
+                            let (otx, orx) = oneshot::channel();
+                            self.channel_sender
+                                .send(ChannelCommand::FetchMessages(o, n, otx))
+                                .await
+                                .unwrap();
+                            let mut messages = orx.await.unwrap();
+                            for m in messages.drain(..).rev() {
+                                self.connection_sender
+                                    .send(ConnectionCommand::Write(ClientboundPacket::Message(m)))
+                                    .await
+                                    .unwrap();
+                            }
+                        }
                         p => {
                             unreachable!("{:?} should have been handled!", p);
                         }

@@ -5,6 +5,8 @@ use accord::{ENC_TOK_LEN, RSA_BITS};
 use std::collections::HashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+use tokio_postgres::{Client as DBClient, NoTls};
+
 use super::commands::*;
 
 use rand::rngs::OsRng;
@@ -14,32 +16,65 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
+const DB_HOST: &str = "localhost";
+const DB_USER: &str = "postgres";
+const DB_PASS: &str = "supersecretpassword";
+
 #[derive(Debug)]
 pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>>,
     connected_users: HashMap<std::net::SocketAddr, String>,
     salt_generator: ChaCha20Rng,
-    accounts: HashMap<String, Account>,
+    db_client: DBClient,
     priv_key: RsaPrivateKey,
     pub_key: RsaPublicKey,
 }
 
 impl AccordChannel {
-    pub fn spawn(receiver: Receiver<ChannelCommand>) {
+    pub async fn spawn(receiver: Receiver<ChannelCommand>) {
         // Setup
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
-        let accounts = HashMap::new();
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
+        let (db_client, db_connection) = tokio_postgres::connect(
+            &format!("host={DB_HOST} user={DB_USER} password={DB_PASS}"),
+            NoTls,
+        )
+        .await
+        .unwrap();
+
+        tokio::spawn(async move {
+            if let Err(e) = db_connection.await {
+                eprintln!("database connection error: {}", e);
+            };
+        });
+
+        // Try to create account table
+        // (we just error if it already exists :) )
+        let _ = db_client
+            .execute(
+                "CREATE TABLE accounts (username varchar(255) NOT NULL UNIQUE, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
+                &[],
+            )
+            .await;
+
+        // Try to create messages table
+        // (we just error if it already exists :) )
+        let _ = db_client
+            .execute(
+        "CREATE TABLE messages ( sender varchar(255) NOT NULL, content varchar(1023) NOT NULL, send_time bigint NOT NULL, CONSTRAINT fk_username FOREIGN KEY(sender) REFERENCES accounts(username));",
+        &[],
+        ).await;
+
         let s = Self {
             receiver,
             txs,
             connected_users,
             salt_generator: ChaCha20Rng::from_entropy(),
-            accounts,
+            db_client,
             priv_key,
             pub_key,
         };
@@ -54,6 +89,9 @@ impl AccordChannel {
             match p {
                 Write(p) => {
                     println!("Message: {:?}", &p);
+                    if let ClientboundPacket::Message(message) = &p {
+                        self.insert_message(message).await;
+                    }
                     for (addr, tx_) in &self.txs {
                         // Only send to logged in users
                         // Maybe there is a prettier way to achieve that? Seems suboptimal
@@ -138,6 +176,19 @@ impl AccordChannel {
                     .await
                     .unwrap();
                 }
+                FetchMessages(o, n, otx) => {
+                    let n = n.min(64); // Clamp so we don't query and send too much
+                    let messages_rows = self.fetch_messages(o, n).await;
+                    let messages = messages_rows
+                        .iter()
+                        .map(|r| accord::packets::Message {
+                            text: r.get("content"),
+                            sender: r.get("sender"),
+                            time: r.get::<_, i64>("send_time") as u64,
+                        })
+                        .collect();
+                    otx.send(messages).unwrap();
+                }
             }
         }
     }
@@ -153,10 +204,13 @@ impl AccordChannel {
         {
             let res = if !verify_username(&username) {
                 Err("Invalid username!".to_string())
-            } else if let Some(account) = self.accounts.get(&username) {
-                let salt = account.salt;
+            } else if let Some(row) = self.get_user(&username).await {
+                let salt_s: String = row.get("salt");
+                let salt = base64::decode(salt_s).unwrap();
                 let pass_hash = hash_password(password, salt);
-                if pass_hash == account.password {
+                let acc_pass_s: String = row.get("password");
+                let acc_pass = base64::decode(acc_pass_s).unwrap();
+                if pass_hash == acc_pass.as_slice() {
                     if self.connected_users.values().any(|u| u == &username) {
                         Err("Already logged in.".to_string())
                     } else {
@@ -170,11 +224,7 @@ impl AccordChannel {
                 let mut salt = [0; 64];
                 self.salt_generator.fill_bytes(&mut salt);
                 let pass_hash = hash_password(password, salt);
-                let account = Account {
-                    password: pass_hash,
-                    salt,
-                };
-                self.accounts.insert(username.clone(), account);
+                self.insert_user(&username, &pass_hash, &salt).await;
                 println!("New account: {}", username);
                 Ok(username.clone())
             };
@@ -189,13 +239,42 @@ impl AccordChannel {
             panic!("Provided not login packet to handle_login")
         }
     }
-}
 
-// Account will be indentified by username
-#[derive(Clone, Debug)]
-struct Account {
-    password: [u8; 32], // hashed with salt
-    salt: [u8; 64],
+    async fn insert_user(&self, username: &str, pass_hash: &[u8], salt: &[u8]) {
+        self.db_client
+            .execute(
+                "INSERT INTO accounts VALUES ($1, $2, $3)",
+                &[&username, &base64::encode(pass_hash), &base64::encode(salt)],
+            )
+            .await
+            .unwrap();
+    }
+    async fn get_user(&self, username: &str) -> Option<tokio_postgres::Row> {
+        self.db_client
+            .query_opt("SELECT * FROM accounts WHERE username=$1", &[&username])
+            .await
+            .unwrap()
+    }
+
+    async fn insert_message(&self, message: &accord::packets::Message) {
+        self.db_client
+            .execute(
+                "INSERT INTO messages VALUES ($1, $2, $3)",
+                &[&message.sender, &message.text, &(message.time as i64)],
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn fetch_messages(&self, offset: i64, count: i64) -> Vec<tokio_postgres::Row> {
+        self.db_client
+            .query(
+                "SELECT * FROM messages ORDER BY send_time DESC OFFSET $1 ROWS FETCH FIRST $2 ROW ONLY;",
+                &[&offset, &count],
+            )
+            .await
+            .unwrap()
+    }
 }
 
 #[inline]

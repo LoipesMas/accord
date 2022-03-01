@@ -7,8 +7,6 @@ use accord_server::connection::ConnectionWrapper;
 
 //TODO: pad message for security/privacy (so length isn't obvious)?
 //TODO: use logging crate?
-//TODO: persistent account storage?
-//TODO: message history?
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +16,7 @@ async fn main() {
 
     let (ctx, crx) = mpsc::channel(32);
 
-    AccordChannel::spawn(crx);
+    AccordChannel::spawn(crx).await;
 
     println!("Server ready!");
     loop {

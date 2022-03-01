@@ -1,6 +1,13 @@
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+pub struct Message {
+    pub sender: String,
+    pub text: String,
+    pub time: u64,
+}
+
 pub trait Packet {
     fn serialized(&self) -> Vec<u8>;
     fn deserialized(buf: &[u8]) -> Result<(Self, &[u8]), rmp_serde::decode::Error>
@@ -16,6 +23,7 @@ pub enum ServerboundPacket {
     Login { username: String, password: String },
     Message(String),
     Command(String),
+    FetchMessages(i64, i64),
 }
 
 impl Packet for ServerboundPacket {
@@ -41,11 +49,7 @@ pub enum ClientboundPacket {
     UserJoined(String),
     UserLeft(String),
     UsersOnline(Vec<String>),
-    Message {
-        text: String,
-        sender: String,
-        time: u64,
-    },
+    Message(Message),
 }
 
 impl Packet for ClientboundPacket {
