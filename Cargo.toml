@@ -10,6 +10,7 @@ authors = ["LoipesMas"]
 members = [
     "client",
     "server",
+    "accord-gui",
 ]
 
 
