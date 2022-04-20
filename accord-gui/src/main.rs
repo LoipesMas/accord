@@ -20,9 +20,11 @@ enum Views {
 #[derive(Lens, Data, Clone)]
 struct AppState {
     current_view: Views,
+    info_label_text: Arc<String>,
     input_text1: Arc<String>,
     input_text2: Arc<String>,
     input_text3: Arc<String>,
+    input_text4: Arc<String>,
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
     messages: Vector<String>,
 }
@@ -33,15 +35,18 @@ fn main() {
     let main_window = WindowDesc::new(ui_builder());
     let data = AppState {
         current_view: Views::Connect,
+        info_label_text: Arc::new("".to_string()),
         input_text1: Arc::new("127.0.0.1".to_string()),
         input_text2: Arc::new("".to_string()),
         input_text3: Arc::new("".to_string()),
+        input_text4: Arc::new("".to_string()),
         connection_handler_tx: Arc::new(tx),
         messages: Vector::new(),
     };
     let launcher = AppLauncher::with_window(main_window).log_to_console();
 
     let event_sink = launcher.get_external_handle();
+
     std::thread::spawn(move || {
         connection_handler.main_loop(rx, event_sink);
     });
@@ -50,6 +55,9 @@ fn main() {
 }
 
 fn connect_view() -> impl Widget<AppState> {
+    let info_label = Label::dynamic(|data, _env| format!("{}", data))
+        .with_text_color(druid::Color::YELLOW)
+        .lens(AppState::info_label_text);
     let label1 = Label::new("Address:").padding(5.0).center();
     let label2 = Label::new("Username:").padding(5.0).center();
     let label3 = Label::new("Password:").padding(5.0).center();
@@ -66,10 +74,6 @@ fn connect_view() -> impl Widget<AppState> {
                     data.input_text3.to_string(),
                 ))
                 .unwrap();
-            data.current_view = Views::Main;
-            data.input_text1 = Arc::new(String::new());
-            data.input_text2 = Arc::new(String::new());
-            data.input_text3 = Arc::new(String::new());
         })
         .padding(5.0);
     let input1 = TextBox::new().lens(AppState::input_text1);
@@ -77,6 +81,8 @@ fn connect_view() -> impl Widget<AppState> {
     let input3 = TextBox::new().lens(AppState::input_text3);
 
     Flex::column()
+        .with_child(CommandHandler {})
+        .with_child(info_label)
         .with_child(Flex::row().with_child(label1).with_child(input1))
         .with_child(Flex::row().with_child(label2).with_child(input2))
         .with_child(Flex::row().with_child(label3).with_child(input3))
@@ -84,9 +90,13 @@ fn connect_view() -> impl Widget<AppState> {
 }
 
 fn main_view() -> impl Widget<AppState> {
+    let info_label = Label::dynamic(|data, _env| format!("{}", data))
+        .with_text_color(druid::Color::YELLOW)
+        .lens(AppState::info_label_text);
     Flex::column()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
-        .with_child(MessageAdder {}.lens(AppState::messages))
+        .with_child(info_label)
+        .with_child(CommandHandler {})
         .with_flex_child(
             List::new(|| {
                 Label::new(|item: &String, _env: &_| item.clone())
@@ -102,38 +112,48 @@ fn main_view() -> impl Widget<AppState> {
         .with_child(
             Flex::row()
                 .with_flex_child(
-                    TextBox::new().lens(AppState::input_text1).expand_width(),
+                    TextBox::new().lens(AppState::input_text4).expand_width(),
                     1.0,
                 )
                 .with_default_spacer()
                 .with_child(
                     Button::new("Send").on_click(|_ctx, data: &mut AppState, _env| {
-                        if accord::utils::verify_message(&*data.input_text1) {
+                        if accord::utils::verify_message(&*data.input_text4) {
                             data.connection_handler_tx
                                 .blocking_send(ConnectionHandlerCommand::Send(
-                                    data.input_text1.to_string(),
+                                    data.input_text4.to_string(),
                                 ))
                                 .unwrap();
                         }
-                        data.input_text1 = Arc::new(String::new());
+                        data.input_text4 = Arc::new(String::new());
                     }),
                 ),
         )
         .padding(20.0)
 }
 
-struct MessageAdder {}
-impl Widget<Vector<String>> for MessageAdder {
+struct CommandHandler {}
+impl Widget<AppState> for CommandHandler {
     fn event(
         &mut self,
         _ctx: &mut druid::EventCtx,
         event: &druid::Event,
-        data: &mut Vector<String>,
+        data: &mut AppState,
         _env: &druid::Env,
     ) {
         if let druid::Event::Command(command) = event {
-            if let Some(message) = command.get::<String>(druid::Selector::new("add_message")) {
-                data.push_back(message.to_owned());
+            if let Some(command) = command.get::<GuiCommand>(druid::Selector::new("gui_command")) {
+                match command {
+                    GuiCommand::AddMessage(m) => data.messages.push_back(m.to_string()),
+                    GuiCommand::Connected => {
+                        data.info_label_text = Arc::new(String::new());
+                        data.current_view = Views::Main;
+                    }
+                    GuiCommand::ConnectionEnded(m) => {
+                        data.info_label_text = Arc::new(m.to_string());
+                        data.current_view = Views::Connect;
+                    }
+                }
             }
         };
     }
@@ -142,7 +162,7 @@ impl Widget<Vector<String>> for MessageAdder {
         &mut self,
         _ctx: &mut druid::LifeCycleCtx,
         _event: &druid::LifeCycle,
-        _data: &Vector<String>,
+        _data: &AppState,
         _env: &druid::Env,
     ) {
     }
@@ -150,8 +170,8 @@ impl Widget<Vector<String>> for MessageAdder {
     fn update(
         &mut self,
         _ctx: &mut druid::UpdateCtx,
-        _old_data: &Vector<String>,
-        _data: &Vector<String>,
+        _old_data: &AppState,
+        _data: &AppState,
         _env: &druid::Env,
     ) {
     }
@@ -160,13 +180,13 @@ impl Widget<Vector<String>> for MessageAdder {
         &mut self,
         _ctx: &mut druid::LayoutCtx,
         _bc: &druid::BoxConstraints,
-        _data: &Vector<String>,
+        _data: &AppState,
         _env: &druid::Env,
     ) -> druid::Size {
         druid::Size::ZERO
     }
 
-    fn paint(&mut self, _ctx: &mut druid::PaintCtx, _data: &Vector<String>, _env: &druid::Env) {}
+    fn paint(&mut self, _ctx: &mut druid::PaintCtx, _data: &AppState, _env: &druid::Env) {}
 }
 
 fn ui_builder() -> impl Widget<AppState> {

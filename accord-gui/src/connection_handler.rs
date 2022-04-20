@@ -2,6 +2,7 @@ use chrono::TimeZone;
 use druid::ExtEventSink;
 use tokio::net::TcpStream;
 use tokio::runtime;
+use tokio::time::timeout;
 
 use accord::connection::*;
 
@@ -20,6 +21,13 @@ use rsa::PaddingScheme;
 use rsa::PublicKey;
 
 #[derive(Debug)]
+pub enum GuiCommand {
+    AddMessage(String),
+    Connected,
+    ConnectionEnded(String),
+}
+
+#[derive(Debug)]
 pub enum ConnectionHandlerCommand {
     Connect(SocketAddr, String, String),
     Send(String),
@@ -35,29 +43,45 @@ impl ConnectionHandler {
     ) {
         let rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
+            loop {
             match rx.recv().await {
                 Some(ConnectionHandlerCommand::Connect(addr, username, password)) => {
-                    self.connect(rx, addr, username, password, event_sink).await;
+                    self.connect(&mut rx, addr, username, password, &event_sink).await;
                 }
                 c => {
                     panic!("Expected ConnectionHandlerCommand::Connect, got {:?}", c);
                 }
             }
+            }
         });
     }
     pub async fn connect(
-        self,
-        gui_rx: mpsc::Receiver<ConnectionHandlerCommand>,
+        &self,
+        gui_rx: &mut mpsc::Receiver<ConnectionHandlerCommand>,
         addr: SocketAddr,
         username: String,
         password: String,
-        event_sink: ExtEventSink,
+        event_sink: &ExtEventSink,
     ) {
         //==================================
         //      Parse args
         //==================================
         println!("Connecting to: {}", addr);
-        let socket = TcpStream::connect(addr).await.unwrap();
+        let socket = if let Ok(Ok(socket)) =
+            timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr)).await
+        {
+            submit_command(
+                event_sink,
+                GuiCommand::Connected,
+            );
+            socket
+        } else {
+            submit_command(
+                event_sink,
+                GuiCommand::ConnectionEnded("Failed to connect!".to_string()),
+            );
+            return;
+        };
 
         println!("Connected!");
         let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
@@ -174,20 +198,24 @@ impl ConnectionHandler {
                     println!("Login successful");
                 }
                 ClientboundPacket::LoginFailed(m) => {
-                    println!("{}", m);
-                    std::process::exit(1);
+                    submit_command(event_sink,
+                                   GuiCommand::ConnectionEnded(m));
+                    return;
                 }
-                _ => {
-                    println!("Login failed. Server response: {:?}", p);
-                    std::process::exit(1);
+                p => {
+                    let m = format!("Login failed. Server response: {:?}", p);
+                    submit_command(event_sink,
+                                   GuiCommand::ConnectionEnded(m));
+                    return;
                 }
             }
         } else {
-            println!("Failed to login ;/");
-            std::process::exit(1);
+            submit_command(event_sink,
+                           GuiCommand::ConnectionEnded("Login failed ;/".to_string()));
+            return;
         }
 
-        // Get last 20 messages
+        // Get last 50 messages
         writer
             .write_packet(
                 ServerboundPacket::FetchMessages(0, 50),
@@ -221,22 +249,22 @@ impl ConnectionHandler {
         close_sender: oneshot::Sender<()>,
         secret: Option<Vec<u8>>,
         mut nonce_generator: Option<ChaCha20Rng>,
-        event_sink: ExtEventSink,
+        event_sink: &ExtEventSink,
     ) {
         'l: loop {
             match reader.read_packet(&secret, nonce_generator.as_mut()).await {
                 Ok(Some(ClientboundPacket::Message(Message { text, sender, time }))) => {
                     let time = chrono::Local.timestamp(time as i64, 0);
-                    submit_message(
-                        &event_sink,
-                        format!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text),
+                    submit_command(
+                        event_sink,
+                        GuiCommand::AddMessage(format!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text)),
                     );
                 }
                 Ok(Some(ClientboundPacket::UserJoined(username))) => {
-                    submit_message(&event_sink, format!("{} joined the channel", username));
+                    submit_command(event_sink, GuiCommand::AddMessage(format!("{} joined the channel", username)));
                 }
                 Ok(Some(ClientboundPacket::UserLeft(username))) => {
-                    submit_message(&event_sink, format!("{} left the channel", username));
+                    submit_command(event_sink, GuiCommand::AddMessage(format!("{} left the channel", username)));
                 }
                 Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
                     let mut s = String::new();
@@ -246,18 +274,16 @@ impl ConnectionHandler {
                         s += &format!("  {}\n", username);
                     }
                     s += "-------------";
-                    submit_message(&event_sink, s);
+                    submit_command(event_sink, GuiCommand::AddMessage(s));
                 }
                 Ok(Some(p)) => {
                     println!("!!Unhandled packet: {:?}", p);
                 }
-                Err(e) => {
-                    submit_message(&event_sink, e);
-                    close_sender.send(()).unwrap();
-                    break 'l;
-                }
                 _ => {
-                    submit_message(&event_sink, "Connection closed.".to_string());
+                    submit_command(
+                        event_sink,
+                        GuiCommand::ConnectionEnded("Connection closed.".to_string()),
+                    );
                     close_sender.send(()).unwrap();
                     break 'l;
                 }
@@ -270,7 +296,7 @@ impl ConnectionHandler {
         mut close_receiver: oneshot::Receiver<()>,
         secret: Option<Vec<u8>>,
         mut nonce_generator: Option<ChaCha20Rng>,
-        mut gui_rx: mpsc::Receiver<ConnectionHandlerCommand>,
+        gui_rx: &mut mpsc::Receiver<ConnectionHandlerCommand>,
     ) {
         loop {
             tokio::select!(
@@ -299,11 +325,11 @@ impl ConnectionHandler {
     }
 }
 
-fn submit_message(event_sink: &ExtEventSink, message: String) {
+fn submit_command(event_sink: &ExtEventSink, info: GuiCommand) {
     event_sink
         .submit_command(
-            druid::Selector::<String>::new("add_message"),
-            message,
+            druid::Selector::<GuiCommand>::new("gui_command"),
+            info,
             druid::Target::Global,
         )
         .unwrap();
