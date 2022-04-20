@@ -43,7 +43,9 @@ fn main() {
         connection_handler_tx: Arc::new(tx),
         messages: Vector::new(),
     };
-    let launcher = AppLauncher::with_window(main_window).log_to_console();
+    let launcher = AppLauncher::with_window(main_window)
+        .log_to_console()
+        .delegate(Delegate {});
 
     let event_sink = launcher.get_external_handle();
 
@@ -54,6 +56,32 @@ fn main() {
     launcher.launch(data).unwrap();
 }
 
+fn connect_click(data: &mut AppState) {
+    if accord::utils::verify_username(&*data.input_text2) {
+        data.connection_handler_tx
+            .blocking_send(ConnectionHandlerCommand::Connect(
+                SocketAddr::from_str(&format!("{}:{}", data.input_text1, accord::DEFAULT_PORT))
+                    .unwrap(),
+                data.input_text2.to_string(),
+                data.input_text3.to_string(),
+            ))
+            .unwrap();
+    } else {
+        data.info_label_text = Arc::new("Invalid username".to_string());
+    };
+}
+
+fn send_message_click(data: &mut AppState) {
+    if accord::utils::verify_message(&*data.input_text4) {
+        data.connection_handler_tx
+            .blocking_send(ConnectionHandlerCommand::Send(data.input_text4.to_string()))
+            .unwrap();
+        data.input_text4 = Arc::new(String::new());
+    } else {
+        data.info_label_text = Arc::new("Invalid message".to_string());
+    };
+}
+
 fn connect_view() -> impl Widget<AppState> {
     let info_label = Label::dynamic(|data, _env| format!("{}", data))
         .with_text_color(druid::Color::YELLOW)
@@ -62,26 +90,13 @@ fn connect_view() -> impl Widget<AppState> {
     let label2 = Label::new("Username:").padding(5.0).center();
     let label3 = Label::new("Password:").padding(5.0).center();
     let button = Button::new("Connect")
-        .on_click(|_ctx, data: &mut AppState, _env| {
-            if !accord::utils::verify_username(&*data.input_text2) {
-                return;
-            }
-            data.connection_handler_tx
-                .blocking_send(ConnectionHandlerCommand::Connect(
-                    SocketAddr::from_str(&format!("{}:{}", data.input_text1, accord::DEFAULT_PORT))
-                        .unwrap(),
-                    data.input_text2.to_string(),
-                    data.input_text3.to_string(),
-                ))
-                .unwrap();
-        })
+        .on_click(|_, data, _| connect_click(data))
         .padding(5.0);
     let input1 = TextBox::new().lens(AppState::input_text1);
     let input2 = TextBox::new().lens(AppState::input_text2);
     let input3 = TextBox::new().lens(AppState::input_text3);
 
     Flex::column()
-        .with_child(CommandHandler {})
         .with_child(info_label)
         .with_child(Flex::row().with_child(label1).with_child(input1))
         .with_child(Flex::row().with_child(label2).with_child(input2))
@@ -96,7 +111,6 @@ fn main_view() -> impl Widget<AppState> {
     Flex::column()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
         .with_child(info_label)
-        .with_child(CommandHandler {})
         .with_flex_child(
             List::new(|| {
                 Label::new(|item: &String, _env: &_| item.clone())
@@ -117,76 +131,11 @@ fn main_view() -> impl Widget<AppState> {
                 )
                 .with_default_spacer()
                 .with_child(
-                    Button::new("Send").on_click(|_ctx, data: &mut AppState, _env| {
-                        if accord::utils::verify_message(&*data.input_text4) {
-                            data.connection_handler_tx
-                                .blocking_send(ConnectionHandlerCommand::Send(
-                                    data.input_text4.to_string(),
-                                ))
-                                .unwrap();
-                        }
-                        data.input_text4 = Arc::new(String::new());
-                    }),
+                    Button::new("Send")
+                        .on_click(|_ctx, data: &mut AppState, _env| send_message_click(data)),
                 ),
         )
         .padding(20.0)
-}
-
-struct CommandHandler {}
-impl Widget<AppState> for CommandHandler {
-    fn event(
-        &mut self,
-        _ctx: &mut druid::EventCtx,
-        event: &druid::Event,
-        data: &mut AppState,
-        _env: &druid::Env,
-    ) {
-        if let druid::Event::Command(command) = event {
-            if let Some(command) = command.get::<GuiCommand>(druid::Selector::new("gui_command")) {
-                match command {
-                    GuiCommand::AddMessage(m) => data.messages.push_back(m.to_string()),
-                    GuiCommand::Connected => {
-                        data.info_label_text = Arc::new(String::new());
-                        data.current_view = Views::Main;
-                    }
-                    GuiCommand::ConnectionEnded(m) => {
-                        data.info_label_text = Arc::new(m.to_string());
-                        data.current_view = Views::Connect;
-                    }
-                }
-            }
-        };
-    }
-
-    fn lifecycle(
-        &mut self,
-        _ctx: &mut druid::LifeCycleCtx,
-        _event: &druid::LifeCycle,
-        _data: &AppState,
-        _env: &druid::Env,
-    ) {
-    }
-
-    fn update(
-        &mut self,
-        _ctx: &mut druid::UpdateCtx,
-        _old_data: &AppState,
-        _data: &AppState,
-        _env: &druid::Env,
-    ) {
-    }
-
-    fn layout(
-        &mut self,
-        _ctx: &mut druid::LayoutCtx,
-        _bc: &druid::BoxConstraints,
-        _data: &AppState,
-        _env: &druid::Env,
-    ) -> druid::Size {
-        druid::Size::ZERO
-    }
-
-    fn paint(&mut self, _ctx: &mut druid::PaintCtx, _data: &AppState, _env: &druid::Env) {}
 }
 
 fn ui_builder() -> impl Widget<AppState> {
@@ -203,4 +152,59 @@ fn ui_builder() -> impl Widget<AppState> {
             ),
             1.0,
         )
+}
+
+struct Delegate;
+
+impl druid::AppDelegate<AppState> for Delegate {
+    fn event(
+        &mut self,
+        _ctx: &mut druid::DelegateCtx,
+        _window_id: druid::WindowId,
+        event: druid::Event,
+        data: &mut AppState,
+        _env: &druid::Env,
+    ) -> Option<druid::Event> {
+        use druid::keyboard_types::Key;
+        use druid::Event;
+        match event {
+            Event::KeyUp(ref kevent) => match kevent.key {
+                Key::Enter => {
+                    match data.current_view {
+                        Views::Connect => connect_click(data),
+                        Views::Main => send_message_click(data),
+                    }
+                    None
+                }
+                _ => Some(event),
+            },
+            _ => Some(event),
+        }
+    }
+
+    fn command(
+        &mut self,
+        _ctx: &mut druid::DelegateCtx,
+        _target: druid::Target,
+        cmd: &druid::Command,
+        data: &mut AppState,
+        _env: &druid::Env,
+    ) -> druid::Handled {
+        if let Some(command) = cmd.get::<GuiCommand>(druid::Selector::new("gui_command")) {
+            match command {
+                GuiCommand::AddMessage(m) => data.messages.push_back(m.to_string()),
+                GuiCommand::Connected => {
+                    data.info_label_text = Arc::new(String::new());
+                    data.current_view = Views::Main;
+                }
+                GuiCommand::ConnectionEnded(m) => {
+                    data.info_label_text = Arc::new(m.to_string());
+                    data.current_view = Views::Connect;
+                }
+            };
+            druid::Handled::Yes
+        } else {
+            druid::Handled::No
+        }
+    }
 }

@@ -44,14 +44,15 @@ impl ConnectionHandler {
         let rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             loop {
-            match rx.recv().await {
-                Some(ConnectionHandlerCommand::Connect(addr, username, password)) => {
-                    self.connect(&mut rx, addr, username, password, &event_sink).await;
+                match rx.recv().await {
+                    Some(ConnectionHandlerCommand::Connect(addr, username, password)) => {
+                        self.connect(&mut rx, addr, username, password, &event_sink)
+                            .await;
+                    }
+                    c => {
+                        panic!("Expected ConnectionHandlerCommand::Connect, got {:?}", c);
+                    }
                 }
-                c => {
-                    panic!("Expected ConnectionHandlerCommand::Connect, got {:?}", c);
-                }
-            }
             }
         });
     }
@@ -70,10 +71,7 @@ impl ConnectionHandler {
         let socket = if let Ok(Ok(socket)) =
             timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr)).await
         {
-            submit_command(
-                event_sink,
-                GuiCommand::Connected,
-            );
+            submit_command(event_sink, GuiCommand::Connected);
             socket
         } else {
             submit_command(
@@ -198,20 +196,20 @@ impl ConnectionHandler {
                     println!("Login successful");
                 }
                 ClientboundPacket::LoginFailed(m) => {
-                    submit_command(event_sink,
-                                   GuiCommand::ConnectionEnded(m));
+                    submit_command(event_sink, GuiCommand::ConnectionEnded(m));
                     return;
                 }
                 p => {
                     let m = format!("Login failed. Server response: {:?}", p);
-                    submit_command(event_sink,
-                                   GuiCommand::ConnectionEnded(m));
+                    submit_command(event_sink, GuiCommand::ConnectionEnded(m));
                     return;
                 }
             }
         } else {
-            submit_command(event_sink,
-                           GuiCommand::ConnectionEnded("Login failed ;/".to_string()));
+            submit_command(
+                event_sink,
+                GuiCommand::ConnectionEnded("Login failed ;/".to_string()),
+            );
             return;
         }
 
@@ -257,14 +255,25 @@ impl ConnectionHandler {
                     let time = chrono::Local.timestamp(time as i64, 0);
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(format!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text)),
+                        GuiCommand::AddMessage(format!(
+                            "{} ({}): {}",
+                            sender,
+                            time.format("%H:%M %d-%m"),
+                            text
+                        )),
                     );
                 }
                 Ok(Some(ClientboundPacket::UserJoined(username))) => {
-                    submit_command(event_sink, GuiCommand::AddMessage(format!("{} joined the channel", username)));
+                    submit_command(
+                        event_sink,
+                        GuiCommand::AddMessage(format!("{} joined the channel", username)),
+                    );
                 }
                 Ok(Some(ClientboundPacket::UserLeft(username))) => {
-                    submit_command(event_sink, GuiCommand::AddMessage(format!("{} left the channel", username)));
+                    submit_command(
+                        event_sink,
+                        GuiCommand::AddMessage(format!("{} left the channel", username)),
+                    );
                 }
                 Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
                     let mut s = String::new();
