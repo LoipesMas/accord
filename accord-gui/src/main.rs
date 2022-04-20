@@ -4,20 +4,20 @@ use tokio::sync::mpsc;
 
 use druid::{
     im::Vector,
-    widget::{Button, Flex, Label, List, TextBox, ViewSwitcher},
-    AppLauncher, Data, Lens, Widget, WidgetExt, WindowDesc,
+    widget::{Button, Controller, Either, Flex, Label, List, TextBox, ViewSwitcher},
+    AppLauncher, Data, Env, Event, EventCtx, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
 };
 
 mod connection_handler;
 use connection_handler::*;
 
-#[derive(Data, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Data, Clone, Copy, PartialEq, Eq)]
 enum Views {
     Connect,
     Main,
 }
 
-#[derive(Lens, Data, Clone)]
+#[derive(Debug,Lens, Data, Clone)]
 struct AppState {
     current_view: Views,
     info_label_text: Arc<String>,
@@ -93,7 +93,9 @@ fn connect_view() -> impl Widget<AppState> {
         .on_click(|_, data, _| connect_click(data))
         .padding(5.0);
     let input1 = TextBox::new().lens(AppState::input_text1);
-    let input2 = TextBox::new().lens(AppState::input_text2);
+    let input2 = TextBox::new()
+        .lens(AppState::input_text2)
+        .controller(TakeFocusConnect);
     let input3 = TextBox::new().lens(AppState::input_text3);
 
     Flex::column()
@@ -126,7 +128,10 @@ fn main_view() -> impl Widget<AppState> {
         .with_child(
             Flex::row()
                 .with_flex_child(
-                    TextBox::new().lens(AppState::input_text4).expand_width(),
+                    TextBox::new()
+                        .lens(AppState::input_text4)
+                        .expand_width()
+                        .controller(TakeFocusMain),
                     1.0,
                 )
                 .with_default_spacer()
@@ -152,6 +157,34 @@ fn ui_builder() -> impl Widget<AppState> {
             ),
             1.0,
         )
+}
+struct TakeFocusConnect;
+
+impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        if let Event::WindowConnected = event {
+            ctx.request_focus();
+        }
+        else if let Event::Command(command) = event {
+            if let Some(GuiCommand::ConnectionEnded(_)) = command.get::<GuiCommand>(druid::Selector::new("gui_command")) {
+                ctx.request_focus();
+            }
+        }
+        child.event(ctx, event, data, env)
+    }
+}
+
+struct TakeFocusMain;
+
+impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusMain {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        if let Event::Command(command) = event {
+            if let Some(GuiCommand::Connected) = command.get::<GuiCommand>(druid::Selector::new("gui_command")) {
+                ctx.request_focus();
+            }
+        }
+        child.event(ctx, event, data, env)
+    }
 }
 
 struct Delegate;
