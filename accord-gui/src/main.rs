@@ -198,6 +198,7 @@ impl druid::AppDelegate<AppState> for Delegate {
                     data.current_view = Views::Main;
                 }
                 GuiCommand::ConnectionEnded(m) => {
+                    data.messages = Vector::new();
                     data.info_label_text = Arc::new(m.to_string());
                     data.current_view = Views::Connect;
                 }
