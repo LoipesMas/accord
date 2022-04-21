@@ -1,18 +1,21 @@
-use std::collections::HashMap;
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     str::FromStr,
     sync::{Arc, Mutex},
 };
 
-use druid::kurbo::Insets;
 use tokio::sync::mpsc;
 
 use druid::{
     im::Vector,
-    widget::{Button, Controller, Either, Flex, Image, Label, List, TextBox, ViewSwitcher},
-    AppLauncher, Data, Env, Event, EventCtx, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
+    kurbo::Insets,
+    widget::{Button, Either, Flex, Image, Label, List, TextBox, ViewSwitcher},
+    AppLauncher, Data, Env, Event, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
 };
+
+mod controllers;
+use controllers::*;
 
 mod connection_handler;
 use connection_handler::*;
@@ -151,7 +154,8 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
                 Either::new(
                     move |data: &String, _env: &_| {
                         data.splitn(3, ':')
-                            .nth(2).and_then(|s| dled_images_2.lock().ok().map(|d| (*d).contains_key(s)))
+                            .nth(2)
+                            .and_then(|s| dled_images_2.lock().ok().map(|d| (*d).contains_key(s)))
                             .unwrap_or(false)
                     },
                     image_from_link(Arc::clone(&dled_images)),
@@ -203,85 +207,6 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
         )
 }
 
-struct ImageController {
-    dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
-}
-
-impl Controller<String, Image> for ImageController {
-    fn lifecycle(
-        &mut self,
-        child: &mut Image,
-        _ctx: &mut druid::LifeCycleCtx,
-        event: &druid::LifeCycle,
-        data: &String,
-        _env: &Env,
-    ) {
-        if let druid::LifeCycle::WidgetAdded = event {
-            if let Some(link) = data.splitn(3, ':').nth(2) {
-                if let Some(id) = self.dled_images.lock().unwrap().get(link) {
-                    child.set_image_data(id.clone());
-                }
-            }
-        }
-    }
-}
-
-struct ScrollController;
-
-impl<W> Controller<Vector<String>, druid::widget::Scroll<Vector<String>, W>> for ScrollController
-where
-    W: Widget<Vector<String>>,
-{
-    fn update(
-        &mut self,
-        child: &mut druid::widget::Scroll<Vector<String>, W>,
-        ctx: &mut druid::UpdateCtx,
-        old_data: &Vector<String>,
-        data: &Vector<String>,
-        env: &Env,
-    ) {
-        //TODO: fix scroll...
-        //  === notification??
-        let should_scroll = !child.scroll_by(druid::Vec2 { x: 0.0, y: 0.01 });
-        child.update(ctx, old_data, data, env);
-        if should_scroll {
-            child.scroll_by(druid::Vec2 { x: 0.0, y: 20.0 });
-        }
-    }
-}
-
-struct TakeFocusConnect;
-
-impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
-        if let Event::WindowConnected = event {
-            ctx.request_focus();
-        } else if let Event::Command(command) = event {
-            if let Some(GuiCommand::ConnectionEnded(_)) =
-                command.get::<GuiCommand>(druid::Selector::new("gui_command"))
-            {
-                ctx.request_focus();
-            }
-        }
-        child.event(ctx, event, data, env)
-    }
-}
-
-struct TakeFocusMain;
-
-impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusMain {
-    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
-        if let Event::Command(command) = event {
-            if let Some(GuiCommand::Connected) =
-                command.get::<GuiCommand>(druid::Selector::new("gui_command"))
-            {
-                ctx.request_focus();
-            }
-        }
-        child.event(ctx, event, data, env)
-    }
-}
-
 struct Delegate {
     dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
 }
@@ -328,7 +253,10 @@ impl druid::AppDelegate<AppState> for Delegate {
                         let mut dled_images = self.dled_images.lock().unwrap();
                         if !dled_images.contains_key(link) {
                             //TODO: replace this block with async
-                            let client = reqwest::blocking::ClientBuilder::new().timeout(std::time::Duration::from_secs(3)).build().unwrap();
+                            let client = reqwest::blocking::ClientBuilder::new()
+                                .timeout(std::time::Duration::from_secs(3))
+                                .build()
+                                .unwrap();
                             let req = client.get(link).build();
                             match req.and_then(|req| client.execute(req)) {
                                 Ok(resp) => {
@@ -360,7 +288,7 @@ impl druid::AppDelegate<AppState> for Delegate {
                                 }
                                 Err(e) => {
                                     println!("{}", e);
-                                },
+                                }
                             }
                         }
                     }

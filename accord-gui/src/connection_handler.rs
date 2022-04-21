@@ -1,24 +1,21 @@
 use chrono::TimeZone;
 use druid::ExtEventSink;
-use tokio::net::TcpStream;
-use tokio::runtime;
-use tokio::time::timeout;
 
-use accord::connection::*;
+use tokio::{
+    net::TcpStream,
+    runtime,
+    sync::{mpsc, oneshot},
+    time::timeout,
+};
 
-use accord::packets::*;
-
-use accord::{ENC_TOK_LEN, SECRET_LEN};
+use accord::{connection::*, packets::*, ENC_TOK_LEN, SECRET_LEN};
 
 use std::net::SocketAddr;
-
-use tokio::sync::{mpsc, oneshot};
 
 use rand::{rngs::OsRng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
-use rsa::PaddingScheme;
-use rsa::PublicKey;
+use rsa::{PaddingScheme, PublicKey};
 
 #[derive(Debug)]
 pub enum GuiCommand {
