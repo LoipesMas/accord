@@ -7,6 +7,9 @@ edition = "2021"
 
 [dependencies]
 druid = { git = "https://github.com/linebender/druid.git", features=["im"] }
+reqwest = {version = "0.11", features = ["blocking"]}
+image = "0.24.1"
+
 accord = {path = ".."}
 tokio = {version = "1.15.0", features = ["full"]}
 bytes = "1.1"
