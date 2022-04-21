@@ -1,7 +1,7 @@
 /// Checks for incorrect characters (i.e. control characters)
 #[inline]
 pub fn verify_message<T: AsRef<str>>(m: T) -> bool {
-    !m.as_ref().chars().any(|c| c.is_control())
+    !m.as_ref().chars().any(|c| c.is_control()) && !m.as_ref().is_empty()
 }
 
 /// Checks length and characters
