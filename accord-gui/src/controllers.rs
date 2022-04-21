@@ -1,4 +1,4 @@
-use crate::GuiCommand;
+use crate::{GuiCommand, Message};
 use druid::{
     im::Vector,
     widget::{Controller, Image},
@@ -13,20 +13,19 @@ pub struct ImageController {
     pub dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
 }
 
-impl Controller<String, Image> for ImageController {
+impl Controller<Message, Image> for ImageController {
     fn lifecycle(
         &mut self,
         child: &mut Image,
         _ctx: &mut druid::LifeCycleCtx,
         event: &druid::LifeCycle,
-        data: &String,
+        data: &Message,
         _env: &Env,
     ) {
         if let druid::LifeCycle::WidgetAdded = event {
-            if let Some(link) = data.splitn(3, ':').nth(2) {
-                if let Some(id) = self.dled_images.lock().unwrap().get(link) {
-                    child.set_image_data(id.clone());
-                }
+            let link = &data.content;
+            if let Some(id) = self.dled_images.lock().unwrap().get(link) {
+                child.set_image_data(id.clone());
             }
         }
     }
@@ -34,16 +33,16 @@ impl Controller<String, Image> for ImageController {
 
 pub struct ScrollController;
 
-impl<W> Controller<Vector<String>, druid::widget::Scroll<Vector<String>, W>> for ScrollController
+impl<W> Controller<Vector<Message>, druid::widget::Scroll<Vector<Message>, W>> for ScrollController
 where
-    W: Widget<Vector<String>>,
+    W: Widget<Vector<Message>>,
 {
     fn update(
         &mut self,
-        child: &mut druid::widget::Scroll<Vector<String>, W>,
+        child: &mut druid::widget::Scroll<Vector<Message>, W>,
         ctx: &mut druid::UpdateCtx,
-        old_data: &Vector<String>,
-        data: &Vector<String>,
+        old_data: &Vector<Message>,
+        data: &Vector<Message>,
         env: &Env,
     ) {
         //TODO: fix scroll...

@@ -17,9 +17,11 @@ use rand_chacha::ChaCha20Rng;
 
 use rsa::{PaddingScheme, PublicKey};
 
+use crate::Message as GMessage;
+
 #[derive(Debug)]
 pub enum GuiCommand {
-    AddMessage(String),
+    AddMessage(GMessage),
     Connected,
     ConnectionEnded(String),
 }
@@ -252,24 +254,23 @@ impl ConnectionHandler {
                     let time = chrono::Local.timestamp(time as i64, 0);
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(format!(
-                            "{} ({}): {}",
+                        GuiCommand::AddMessage(GMessage {
                             sender,
-                            time.format("%H:%M %d-%m"),
-                            text
-                        )),
+                            date: time.format("(%H:%M %d-%m)").to_string(),
+                            content: text,
+                        })
                     );
                 }
                 Ok(Some(ClientboundPacket::UserJoined(username))) => {
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(format!("{} joined the channel", username)),
+                        GuiCommand::AddMessage(GMessage::just_content(format!("{} joined the channel.", username))),
                     );
                 }
                 Ok(Some(ClientboundPacket::UserLeft(username))) => {
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(format!("{} left the channel", username)),
+                        GuiCommand::AddMessage(GMessage::just_content(format!("{} left the channel.", username))),
                     );
                 }
                 Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
@@ -280,7 +281,7 @@ impl ConnectionHandler {
                         s += &format!("  {}\n", username);
                     }
                     s += "-------------";
-                    submit_command(event_sink, GuiCommand::AddMessage(s));
+                    submit_command(event_sink, GuiCommand::AddMessage(GMessage::just_content(s)));
                 }
                 Ok(Some(p)) => {
                     println!("!!Unhandled packet: {:?}", p);

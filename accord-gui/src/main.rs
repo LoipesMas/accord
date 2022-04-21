@@ -22,6 +22,23 @@ use connection_handler::*;
 
 //TODO: Loading up past messages
 
+#[derive(Debug, Data, Lens, Clone, PartialEq, Eq)]
+pub struct Message {
+    pub sender: String,
+    pub date: String,
+    pub content: String,
+}
+
+impl Message {
+    pub fn just_content(content: String) -> Self {
+        Self{
+            sender: String::new(),
+            date: String::new(),
+            content
+        }
+    }
+}
+
 #[derive(Debug, Data, Clone, Copy, PartialEq, Eq)]
 enum Views {
     Connect,
@@ -37,7 +54,7 @@ struct AppState {
     input_text3: Arc<String>,
     input_text4: Arc<String>,
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
-    messages: Vector<String>,
+    messages: Vector<Message>,
 }
 
 fn main() {
@@ -118,18 +135,15 @@ fn connect_view() -> impl Widget<AppState> {
         .with_child(button)
 }
 
-fn image_from_link(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<String> {
+fn image_message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
     let image = Image::new(ImageBuf::empty())
         .fill_mode(druid::widget::FillStrat::Contain)
         .interpolation_mode(druid::piet::InterpolationMode::Bilinear)
         .controller(ImageController { dled_images });
     Flex::column()
         .with_child(
-            Label::dynamic(|data: &String, _env| {
-                let mut sp = data.split(':');
-                sp.next().unwrap_or("").to_owned() + ":" + sp.next().unwrap_or("") + ":"
-            })
-            .align_left(),
+            Label::dynamic(|data: &Message, _env| format!("{} {}:", data.sender, data.date))
+                .align_left(),
         )
         .with_default_spacer()
         .with_child(
@@ -138,6 +152,14 @@ fn image_from_link(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl W
                 .align_left()
                 .padding(Insets::uniform_xy(50.0, 0.0)),
         )
+}
+
+fn text_message() -> impl Widget<Message> {
+    Label::new(|data: &Message, _env: &_| {
+        format!("{} {}: {}", data.sender, data.date, data.content)
+    })
+    .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
+    .expand_width()
 }
 
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
@@ -152,16 +174,15 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
             List::new(move || {
                 let dled_images_2 = Arc::clone(&dled_images);
                 Either::new(
-                    move |data: &String, _env: &_| {
-                        data.splitn(3, ':')
-                            .nth(2)
-                            .and_then(|s| dled_images_2.lock().ok().map(|d| (*d).contains_key(s)))
+                    move |data: &Message, _env: &_| {
+                        dled_images_2
+                            .lock()
+                            .ok()
+                            .map(|d| (*d).contains_key(&data.content))
                             .unwrap_or(false)
                     },
-                    image_from_link(Arc::clone(&dled_images)),
-                    Label::new(|item: &String, _env: &_| item.clone())
-                        .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
-                        .expand_width(),
+                    image_message(Arc::clone(&dled_images)),
+                    text_message(),
                 )
                 .padding(Insets::uniform_xy(0.0, 3.0))
             })
@@ -247,48 +268,46 @@ impl druid::AppDelegate<AppState> for Delegate {
         if let Some(command) = cmd.get::<GuiCommand>(druid::Selector::new("gui_command")) {
             match command {
                 GuiCommand::AddMessage(m) => {
-                    //TODO: rewrite add message to pass 3 strings or smth
-                    data.messages.push_back(m.to_string());
-                    if let Some(link) = m.splitn(3, ':').nth(2) {
-                        let mut dled_images = self.dled_images.lock().unwrap();
-                        if !dled_images.contains_key(link) {
-                            //TODO: replace this block with async
-                            let client = reqwest::blocking::ClientBuilder::new()
-                                .timeout(std::time::Duration::from_secs(3))
-                                .build()
-                                .unwrap();
-                            let req = client.get(link).build();
-                            match req.and_then(|req| client.execute(req)) {
-                                Ok(resp) => {
-                                    if resp.status() == reqwest::StatusCode::OK
-                                        && resp
-                                            .headers()
-                                            .get("content-type")
-                                            .map(|v| {
-                                                v.to_str()
-                                                    .map(|s| s.starts_with("image/"))
-                                                    .unwrap_or(false)
-                                            })
-                                            .unwrap_or(false)
-                                    {
-                                        let img_bytes = resp.bytes().unwrap();
-                                        // image create converts jpeg or whatever to raw bytes
-                                        let img = image::load_from_memory(&img_bytes).unwrap();
-                                        let img2 = img.into_rgba8();
+                    data.messages.push_back(m.clone());
+                    let link = &m.content;
+                    let mut dled_images = self.dled_images.lock().unwrap();
+                    if !dled_images.contains_key(link) {
+                        //TODO: replace this block with async
+                        let client = reqwest::blocking::ClientBuilder::new()
+                            .timeout(std::time::Duration::from_secs(3))
+                            .build()
+                            .unwrap();
+                        let req = client.get(link).build();
+                        match req.and_then(|req| client.execute(req)) {
+                            Ok(resp) => {
+                                if resp.status() == reqwest::StatusCode::OK
+                                    && resp
+                                        .headers()
+                                        .get("content-type")
+                                        .map(|v| {
+                                            v.to_str()
+                                                .map(|s| s.starts_with("image/"))
+                                                .unwrap_or(false)
+                                        })
+                                        .unwrap_or(false)
+                                {
+                                    let img_bytes = resp.bytes().unwrap();
+                                    // image create converts jpeg or whatever to raw bytes
+                                    let img = image::load_from_memory(&img_bytes).unwrap();
+                                    let img2 = img.into_rgba8();
 
-                                        let img_buf = ImageBuf::from_raw(
-                                            img2.as_raw().as_slice(),
-                                            druid::piet::ImageFormat::RgbaSeparate,
-                                            img2.width() as usize,
-                                            img2.height() as usize,
-                                        );
+                                    let img_buf = ImageBuf::from_raw(
+                                        img2.as_raw().as_slice(),
+                                        druid::piet::ImageFormat::RgbaSeparate,
+                                        img2.width() as usize,
+                                        img2.height() as usize,
+                                    );
 
-                                        dled_images.insert(link.to_string(), img_buf);
-                                    }
+                                    dled_images.insert(link.to_string(), img_buf);
                                 }
-                                Err(e) => {
-                                    println!("{}", e);
-                                }
+                            }
+                            Err(e) => {
+                                println!("{}", e);
                             }
                         }
                     }
