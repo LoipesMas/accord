@@ -201,7 +201,7 @@ impl druid::AppDelegate<AppState> for Delegate {
         use druid::keyboard_types::Key;
         use druid::Event;
         match event {
-            Event::KeyUp(ref kevent) => match kevent.key {
+            Event::KeyDown(ref kevent) => match kevent.key {
                 Key::Enter => {
                     match data.current_view {
                         Views::Connect => connect_click(data),
