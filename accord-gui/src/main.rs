@@ -14,6 +14,8 @@ use druid::{
     AppLauncher, Data, Env, Event, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
 };
 
+use flexi_logger::Logger;
+
 mod controllers;
 use controllers::*;
 
@@ -57,7 +59,16 @@ struct AppState {
     messages: Vector<Message>,
 }
 
+fn init_logger() {
+    Logger::try_with_env_or_str("warn")
+        .unwrap()
+        .start()
+        .unwrap();
+}
+
 fn main() {
+    init_logger();
+
     let connection_handler = ConnectionHandler {};
     let (tx, rx) = mpsc::channel(16);
     let dled_images = Arc::new(Mutex::new(HashMap::new()));
@@ -72,12 +83,10 @@ fn main() {
         connection_handler_tx: Arc::new(tx),
         messages: Vector::new(),
     };
-    let launcher = AppLauncher::with_window(main_window)
-        .log_to_console()
-        .delegate(Delegate {
-            dled_images,
-            rt: tokio::runtime::Runtime::new().unwrap(),
-        });
+    let launcher = AppLauncher::with_window(main_window).delegate(Delegate {
+        dled_images,
+        rt: tokio::runtime::Runtime::new().unwrap(),
+    });
 
     let event_sink = launcher.get_external_handle();
 
@@ -267,7 +276,7 @@ impl druid::AppDelegate<AppState> for Delegate {
                             let req = client.get(&link).build();
                             let resp = match req {
                                 Ok(req) => client.execute(req).await,
-                                Err(e) => Err(e),
+                                Err(_) => return,
                             };
                             match resp {
                                 Ok(resp) => {
@@ -306,7 +315,7 @@ impl druid::AppDelegate<AppState> for Delegate {
                                     }
                                 }
                                 Err(e) => {
-                                    println!("{}", e);
+                                    log::warn!("Error when getting image: {}", e);
                                 }
                             }
                         }

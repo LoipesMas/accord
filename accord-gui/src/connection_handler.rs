@@ -19,6 +19,8 @@ use rsa::{PaddingScheme, PublicKey};
 
 use crate::Message as GMessage;
 
+use log::{error, info};
+
 #[derive(Debug)]
 pub enum GuiCommand {
     AddMessage(GMessage),
@@ -66,7 +68,7 @@ impl ConnectionHandler {
         //==================================
         //      Parse args
         //==================================
-        println!("Connecting to: {}", addr);
+        info!("Connecting to: {}", addr);
         let socket = if let Ok(Ok(socket)) =
             timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr)).await
         {
@@ -80,14 +82,14 @@ impl ConnectionHandler {
             return;
         };
 
-        println!("Connected!");
+        info!("Connected!");
         let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
         let (mut reader, mut writer) = connection.split();
 
         //==================================
         //      Encryption
         //==================================
-        println!("Establishing encryption...");
+        info!("Establishing encryption...");
         let secret = None;
         let mut nonce_generator_write = None;
         let mut nonce_generator_read = None;
@@ -110,18 +112,18 @@ impl ConnectionHandler {
         {
             match p {
                 ClientboundPacket::EncryptionResponse(pub_key_der, token_) => {
-                    println!("Encryption step 1 successful");
+                    info!("Encryption step 1 successful");
                     pub_key = rsa::pkcs8::FromPublicKey::from_public_key_der(&pub_key_der).unwrap();
                     assert_eq!(ENC_TOK_LEN, token_.len());
                     token_
                 }
                 _ => {
-                    println!("Encryption failed. Server response: {:?}", p);
+                    error!("Encryption failed. Server response: {:?}", p);
                     std::process::exit(1)
                 }
             }
         } else {
-            println!("Failed to establish encryption");
+            error!("Failed to establish encryption");
             std::process::exit(1)
         };
 
@@ -160,14 +162,14 @@ impl ConnectionHandler {
             .await;
         match p {
             Ok(Some(ClientboundPacket::EncryptionAck)) => {
-                println!("Encryption handshake successful!");
+                info!("Encryption handshake successful!");
             }
             Ok(_) => {
-                println!("Failed encryption step 2. Server response: {:?}", p);
+                error!("Failed encryption step 2. Server response: {:?}", p);
                 std::process::exit(1);
             }
             Err(e) => {
-                println!("{}", e);
+                error!("{}", e);
                 std::process::exit(1);
             }
         }
@@ -175,7 +177,7 @@ impl ConnectionHandler {
         //==================================
         //      Login
         //==================================
-        println!("Logging in...");
+        info!("Logging in...");
         writer
             .write_packet(
                 ServerboundPacket::Login { username, password },
@@ -192,7 +194,7 @@ impl ConnectionHandler {
         {
             match p {
                 ClientboundPacket::LoginAck => {
-                    println!("Login successful");
+                    info!("Login successful");
                 }
                 ClientboundPacket::LoginFailed(m) => {
                     submit_command(event_sink, GuiCommand::ConnectionEnded(m));
@@ -293,7 +295,7 @@ impl ConnectionHandler {
                     );
                 }
                 Ok(Some(p)) => {
-                    println!("!!Unhandled packet: {:?}", p);
+                    error!("!!Unhandled packet: {:?}", p);
                 }
                 _ => {
                     submit_command(

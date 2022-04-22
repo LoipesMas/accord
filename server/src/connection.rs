@@ -273,8 +273,7 @@ impl ConnectionReaderWrapper {
                     // This "error" is expected
                     if e == "Connection reset by peer" {
                         log::info!("{}", e);
-                    }
-                    else {
+                    } else {
                         log::error!("Err: {:?}", e);
                     }
                     break;
