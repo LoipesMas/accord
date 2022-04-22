@@ -5,12 +5,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use config::Config;
 use tokio::sync::mpsc;
 
 use druid::{
     im::Vector,
     kurbo::Insets,
-    widget::{Button, Flex, Label, List, TextBox, ViewSwitcher},
+    widget::{Button, Checkbox, Flex, Label, List, TextBox, ViewSwitcher},
     AppLauncher, Data, Env, Event, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
 };
 
@@ -21,6 +22,8 @@ use controllers::*;
 
 mod connection_handler;
 use connection_handler::*;
+
+mod config;
 
 //TODO: Loading up past messages
 
@@ -54,6 +57,7 @@ struct AppState {
     input_text1: Arc<String>,
     input_text2: Arc<String>,
     input_text3: Arc<String>,
+    remember_login: bool,
     input_text4: Arc<String>,
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
     messages: Vector<Message>,
@@ -73,12 +77,14 @@ fn main() {
     let (tx, rx) = mpsc::channel(16);
     let dled_images = Arc::new(Mutex::new(HashMap::new()));
     let main_window = WindowDesc::new(ui_builder(Arc::clone(&dled_images))).title("accord");
+    let config = config::load_config();
     let data = AppState {
         current_view: Views::Connect,
         info_label_text: Arc::new("".to_string()),
-        input_text1: Arc::new("127.0.0.1".to_string()),
-        input_text2: Arc::new("".to_string()),
+        input_text1: Arc::new(config.address.clone()),
+        input_text2: Arc::new(config.username.clone()),
         input_text3: Arc::new("".to_string()),
+        remember_login: config.remember_login,
         input_text4: Arc::new("".to_string()),
         connection_handler_tx: Arc::new(tx),
         messages: Vector::new(),
@@ -115,6 +121,7 @@ fn connect_click(data: &mut AppState) {
                 data.input_text3.to_string(),
             ))
             .unwrap();
+        config::save_config(config_from_appstate(data)).unwrap();
     } else {
         log::warn!("Invalid username");
         data.info_label_text = Arc::new("Invalid username".to_string());
@@ -144,9 +151,11 @@ fn connect_view() -> impl Widget<AppState> {
         .padding(5.0);
     let input1 = TextBox::new().lens(AppState::input_text1);
     let input2 = TextBox::new()
-        .lens(AppState::input_text2)
+        .lens(AppState::input_text2);
+    let input3 = TextBox::new().lens(AppState::input_text3)
         .controller(TakeFocusConnect);
-    let input3 = TextBox::new().lens(AppState::input_text3);
+    let checkbox = Checkbox::new("Remember login")
+        .lens(AppState::remember_login);
 
     Flex::column()
         .with_child(info_label)
@@ -154,6 +163,7 @@ fn connect_view() -> impl Widget<AppState> {
         .with_child(Flex::row().with_child(label2).with_child(input2))
         .with_child(Flex::row().with_child(label3).with_child(input3))
         .with_child(button)
+        .with_child(checkbox)
 }
 
 fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
@@ -248,6 +258,19 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
 struct Delegate {
     dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
     rt: tokio::runtime::Runtime,
+}
+
+fn config_from_appstate(data: &AppState) -> Config {
+    let (address, username) = if data.remember_login {
+        (data.input_text1.to_string(), data.input_text2.to_string())
+    } else {
+        Default::default()
+    };
+    Config {
+        address,
+        username,
+        remember_login: data.remember_login,
+    }
 }
 
 impl druid::AppDelegate<AppState> for Delegate {
