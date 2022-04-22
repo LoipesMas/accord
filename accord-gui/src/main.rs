@@ -98,16 +98,25 @@ fn main() {
 }
 
 fn connect_click(data: &mut AppState) {
+    let addr = match try_parse_addr(&data.input_text1) {
+        Ok(addr) => addr,
+        Err(e) => {
+            log::warn!("{}", e);
+            data.info_label_text = Arc::new("Invalid address".to_string());
+            return;
+        }
+    };
     if accord::utils::verify_username(&*data.input_text2) {
+        data.info_label_text = Arc::new("Connecting...".to_string());
         data.connection_handler_tx
             .blocking_send(ConnectionHandlerCommand::Connect(
-                SocketAddr::from_str(&format!("{}:{}", data.input_text1, accord::DEFAULT_PORT))
-                    .unwrap(),
+                addr,
                 data.input_text2.to_string(),
                 data.input_text3.to_string(),
             ))
             .unwrap();
     } else {
+        log::warn!("Invalid username");
         data.info_label_text = Arc::new("Invalid username".to_string());
     };
 }
@@ -170,6 +179,14 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
         .with_flex_child(Flex::column().with_child(image_from_link), 1.0)
         .background(druid::Color::rgba(0.0, 0.0, 0.0, 0.1))
         .padding(Insets::uniform_xy(0.0, 3.0))
+}
+
+fn try_parse_addr(s: &str) -> Result<SocketAddr, std::net::AddrParseError> {
+    if s.contains(':') {
+        SocketAddr::from_str(s)
+    } else {
+        SocketAddr::from_str(&format!("{}:{}", s, accord::DEFAULT_PORT))
+    }
 }
 
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
