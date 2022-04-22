@@ -2,31 +2,116 @@ use crate::{GuiCommand, Message};
 use druid::{
     im::Vector,
     widget::{Controller, Image},
-    Env, Event, EventCtx, ImageBuf, Widget,
+    Env, Event, EventCtx, ImageBuf, Insets, Widget, WidgetExt, WidgetPod,
 };
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
-pub struct ImageController {
+// "Heavily inspired" by RemoteImage from jpochyla's psst ;]
+pub struct ImageFromLink {
     pub dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
+    placeholder: WidgetPod<Message, Box<dyn Widget<Message>>>,
+    image: Option<WidgetPod<Message, Box<dyn Widget<Message>>>>,
+}
+impl ImageFromLink {
+    pub fn new(
+        placeholder: impl Widget<Message> + 'static,
+        dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
+    ) -> Self {
+        Self {
+            placeholder: WidgetPod::new(placeholder).boxed(),
+            dled_images,
+            image: None,
+        }
+    }
 }
 
-impl Controller<Message, Image> for ImageController {
+impl Widget<Message> for ImageFromLink {
+    fn event(&mut self, ctx: &mut druid::EventCtx, event: &Event, data: &mut Message, env: &Env) {
+        if let Event::Command(cmd) = event {
+            if let Some(link_c) = cmd.get(druid::Selector::<String>::new("image_downloaded")) {
+                let link = &data.content;
+                if link == link_c {
+                    if let Some(ib) = self.dled_images.lock().unwrap().get(link) {
+                        self.image.replace(
+                            WidgetPod::new(
+                                Image::new(ib.clone())
+                                    .fill_mode(druid::widget::FillStrat::Contain)
+                                    .interpolation_mode(druid::piet::InterpolationMode::Bilinear)
+                                    .fix_width(400.0)
+                                    .align_left()
+                                    .padding(Insets::uniform_xy(50.0, 0.0)),
+                            )
+                            .boxed(),
+                        );
+                        ctx.children_changed();
+                    }
+                }
+                return;
+            }
+        }
+
+        if let Some(image) = self.image.as_mut() {
+            image.event(ctx, event, data, env);
+        } else {
+            self.placeholder.event(ctx, event, data, env);
+        }
+    }
     fn lifecycle(
         &mut self,
-        child: &mut Image,
-        _ctx: &mut druid::LifeCycleCtx,
+        ctx: &mut druid::LifeCycleCtx,
         event: &druid::LifeCycle,
         data: &Message,
-        _env: &Env,
+        env: &Env,
     ) {
-        if let druid::LifeCycle::WidgetAdded = event {
-            let link = &data.content;
-            if let Some(id) = self.dled_images.lock().unwrap().get(link) {
-                child.set_image_data(id.clone());
-            }
+        if let Some(image) = self.image.as_mut() {
+            image.lifecycle(ctx, event, data, env);
+        } else {
+            self.placeholder.lifecycle(ctx, event, data, env);
+        }
+    }
+    fn update(
+        &mut self,
+        ctx: &mut druid::UpdateCtx,
+        _old_data: &Message,
+        data: &Message,
+        env: &Env,
+    ) {
+        // if we ever add message editing, we need to update this!
+        //
+        if let Some(image) = self.image.as_mut() {
+            image.update(ctx, data, env);
+        } else {
+            self.placeholder.update(ctx, data, env);
+        }
+    }
+
+    fn layout(
+        &mut self,
+        ctx: &mut druid::LayoutCtx,
+        bc: &druid::BoxConstraints,
+        data: &Message,
+        env: &Env,
+    ) -> druid::Size {
+        if let Some(image) = self.image.as_mut() {
+            let size = image.layout(ctx, bc, data, env);
+            image.set_origin(ctx, data, env, druid::Point::ORIGIN);
+            size
+        } else {
+            let size = self.placeholder.layout(ctx, bc, data, env);
+            self.placeholder
+                .set_origin(ctx, data, env, druid::Point::ORIGIN);
+            size
+        }
+    }
+
+    fn paint(&mut self, ctx: &mut druid::PaintCtx, data: &Message, env: &Env) {
+        if let Some(image) = self.image.as_mut() {
+            image.paint(ctx, data, env)
+        } else {
+            self.placeholder.paint(ctx, data, env)
         }
     }
 }

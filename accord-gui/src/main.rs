@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use druid::{
     im::Vector,
     kurbo::Insets,
-    widget::{Button, Either, Flex, Image, Label, List, TextBox, ViewSwitcher},
+    widget::{Button, Flex, Label, List, TextBox, ViewSwitcher},
     AppLauncher, Data, Env, Event, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
 };
 
@@ -31,10 +31,10 @@ pub struct Message {
 
 impl Message {
     pub fn just_content(content: String) -> Self {
-        Self{
+        Self {
             sender: String::new(),
             date: String::new(),
-            content
+            content,
         }
     }
 }
@@ -74,7 +74,10 @@ fn main() {
     };
     let launcher = AppLauncher::with_window(main_window)
         .log_to_console()
-        .delegate(Delegate { dled_images });
+        .delegate(Delegate {
+            dled_images,
+            rt: tokio::runtime::Runtime::new().unwrap(),
+        });
 
     let event_sink = launcher.get_external_handle();
 
@@ -135,31 +138,23 @@ fn connect_view() -> impl Widget<AppState> {
         .with_child(button)
 }
 
-fn image_message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
-    let image = Image::new(ImageBuf::empty())
-        .fill_mode(druid::widget::FillStrat::Contain)
-        .interpolation_mode(druid::piet::InterpolationMode::Bilinear)
-        .controller(ImageController { dled_images });
-    Flex::column()
+fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
+    let font = druid::FontDescriptor::new(druid::FontFamily::SYSTEM_UI).with_size(17.0);
+    let content_label = Label::dynamic(|d: &String, _e: &_| d.clone())
+        .with_font(font.clone())
+        .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
+        .lens(Message::content);
+    let image_from_link = ImageFromLink::new(content_label, dled_images);
+    Flex::row()
+        .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
         .with_child(
             Label::dynamic(|data: &Message, _env| format!("{} {}:", data.sender, data.date))
-                .align_left(),
+                .with_font(font.with_weight(druid::FontWeight::BOLD)),
         )
         .with_default_spacer()
-        .with_child(
-            image
-                .fix_width(400.0)
-                .align_left()
-                .padding(Insets::uniform_xy(50.0, 0.0)),
-        )
-}
-
-fn text_message() -> impl Widget<Message> {
-    Label::new(|data: &Message, _env: &_| {
-        format!("{} {}: {}", data.sender, data.date, data.content)
-    })
-    .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
-    .expand_width()
+        .with_flex_child(Flex::column().with_child(image_from_link), 1.0)
+        .background(druid::Color::rgba(0.0, 0.0, 0.0, 0.1))
+        .padding(Insets::uniform_xy(0.0, 3.0))
 }
 
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
@@ -173,18 +168,7 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
         .with_flex_child(
             List::new(move || {
                 let dled_images_2 = Arc::clone(&dled_images);
-                Either::new(
-                    move |data: &Message, _env: &_| {
-                        dled_images_2
-                            .lock()
-                            .ok()
-                            .map(|d| (*d).contains_key(&data.content))
-                            .unwrap_or(false)
-                    },
-                    image_message(Arc::clone(&dled_images)),
-                    text_message(),
-                )
-                .padding(Insets::uniform_xy(0.0, 3.0))
+                message(dled_images_2)
             })
             .scroll()
             .vertical()
@@ -197,7 +181,7 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
         .with_child(
             Flex::row()
                 .with_flex_child(
-                    TextBox::new()
+                    TextBox::multiline()
                         .lens(AppState::input_text4)
                         .expand_width()
                         .controller(TakeFocusMain),
@@ -230,6 +214,7 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
 
 struct Delegate {
     dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
+    rt: tokio::runtime::Runtime,
 }
 
 impl druid::AppDelegate<AppState> for Delegate {
@@ -259,7 +244,7 @@ impl druid::AppDelegate<AppState> for Delegate {
 
     fn command(
         &mut self,
-        _ctx: &mut druid::DelegateCtx,
+        ctx: &mut druid::DelegateCtx,
         _target: druid::Target,
         cmd: &druid::Command,
         data: &mut AppState,
@@ -269,48 +254,62 @@ impl druid::AppDelegate<AppState> for Delegate {
             match command {
                 GuiCommand::AddMessage(m) => {
                     data.messages.push_back(m.clone());
-                    let link = &m.content;
-                    let mut dled_images = self.dled_images.lock().unwrap();
-                    if !dled_images.contains_key(link) {
-                        //TODO: replace this block with async
-                        let client = reqwest::blocking::ClientBuilder::new()
-                            .timeout(std::time::Duration::from_secs(3))
-                            .build()
-                            .unwrap();
-                        let req = client.get(link).build();
-                        match req.and_then(|req| client.execute(req)) {
-                            Ok(resp) => {
-                                if resp.status() == reqwest::StatusCode::OK
-                                    && resp
-                                        .headers()
-                                        .get("content-type")
-                                        .map(|v| {
-                                            v.to_str()
-                                                .map(|s| s.starts_with("image/"))
-                                                .unwrap_or(false)
-                                        })
-                                        .unwrap_or(false)
-                                {
-                                    let img_bytes = resp.bytes().unwrap();
-                                    // image create converts jpeg or whatever to raw bytes
-                                    let img = image::load_from_memory(&img_bytes).unwrap();
-                                    let img2 = img.into_rgba8();
+                    let dled_images = Arc::clone(&self.dled_images);
+                    let link = m.content.clone();
+                    let event_sink = ctx.get_external_handle();
+                    self.rt.spawn(async move {
+                        if !dled_images.lock().unwrap().contains_key(&link) {
+                            let client = reqwest::ClientBuilder::new()
+                                .timeout(std::time::Duration::from_secs(10))
+                                .build()
+                                .unwrap();
+                            let req = client.get(&link).build();
+                            let resp = match req {
+                                Ok(req) => client.execute(req).await,
+                                Err(e) => Err(e),
+                            };
+                            match resp {
+                                Ok(resp) => {
+                                    if resp.status() == reqwest::StatusCode::OK
+                                        && resp
+                                            .headers()
+                                            .get("content-type")
+                                            .map(|v| {
+                                                v.to_str()
+                                                    .map(|s| s.starts_with("image/"))
+                                                    .unwrap_or(false)
+                                            })
+                                            .unwrap_or(false)
+                                    {
+                                        let img_bytes = resp.bytes().await.unwrap();
+                                        // image crate converts jpeg or whatever to raw bytes
+                                        let img = image::load_from_memory(&img_bytes).unwrap();
+                                        let img2 = img.into_rgba8();
 
-                                    let img_buf = ImageBuf::from_raw(
-                                        img2.as_raw().as_slice(),
-                                        druid::piet::ImageFormat::RgbaSeparate,
-                                        img2.width() as usize,
-                                        img2.height() as usize,
-                                    );
+                                        let img_buf = ImageBuf::from_raw(
+                                            img2.as_raw().as_slice(),
+                                            druid::piet::ImageFormat::RgbaSeparate,
+                                            img2.width() as usize,
+                                            img2.height() as usize,
+                                        );
 
-                                    dled_images.insert(link.to_string(), img_buf);
+                                        let mut dled_images = dled_images.lock().unwrap();
+                                        dled_images.insert(link.clone(), img_buf);
+                                        event_sink
+                                            .submit_command(
+                                                druid::Selector::<String>::new("image_downloaded"),
+                                                link,
+                                                druid::Target::Auto,
+                                            )
+                                            .unwrap();
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("{}", e);
                                 }
                             }
-                            Err(e) => {
-                                println!("{}", e);
-                            }
                         }
-                    }
+                    });
                 }
                 GuiCommand::Connected => {
                     data.info_label_text = Arc::new(String::new());

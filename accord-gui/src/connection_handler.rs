@@ -258,19 +258,25 @@ impl ConnectionHandler {
                             sender,
                             date: time.format("(%H:%M %d-%m)").to_string(),
                             content: text,
-                        })
+                        }),
                     );
                 }
                 Ok(Some(ClientboundPacket::UserJoined(username))) => {
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(GMessage::just_content(format!("{} joined the channel.", username))),
+                        GuiCommand::AddMessage(GMessage::just_content(format!(
+                            "{} joined the channel.",
+                            username
+                        ))),
                     );
                 }
                 Ok(Some(ClientboundPacket::UserLeft(username))) => {
                     submit_command(
                         event_sink,
-                        GuiCommand::AddMessage(GMessage::just_content(format!("{} left the channel.", username))),
+                        GuiCommand::AddMessage(GMessage::just_content(format!(
+                            "{} left the channel.",
+                            username
+                        ))),
                     );
                 }
                 Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
@@ -281,7 +287,10 @@ impl ConnectionHandler {
                         s += &format!("  {}\n", username);
                     }
                     s += "-------------";
-                    submit_command(event_sink, GuiCommand::AddMessage(GMessage::just_content(s)));
+                    submit_command(
+                        event_sink,
+                        GuiCommand::AddMessage(GMessage::just_content(s)),
+                    );
                 }
                 Ok(Some(p)) => {
                     println!("!!Unhandled packet: {:?}", p);
