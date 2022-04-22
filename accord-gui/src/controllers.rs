@@ -28,6 +28,24 @@ impl ImageFromLink {
             image: None,
         }
     }
+
+    fn try_get_image(&mut self, link: &str) -> bool {
+        if let Some(ib) = self.dled_images.lock().unwrap().get(link) {
+            self.image.replace(
+                WidgetPod::new(
+                    Image::new(ib.clone())
+                        .fill_mode(druid::widget::FillStrat::Contain)
+                        .interpolation_mode(druid::piet::InterpolationMode::Bilinear)
+                        .fix_width(400.0)
+                        .align_left()
+                        .padding(Insets::uniform_xy(50.0, 0.0)),
+                )
+                .boxed(),
+            );
+            return true;
+        }
+        false
+    }
 }
 
 impl Widget<Message> for ImageFromLink {
@@ -35,21 +53,8 @@ impl Widget<Message> for ImageFromLink {
         if let Event::Command(cmd) = event {
             if let Some(link_c) = cmd.get(Selector::<String>::new("image_downloaded")) {
                 let link = &data.content;
-                if link == link_c {
-                    if let Some(ib) = self.dled_images.lock().unwrap().get(link) {
-                        self.image.replace(
-                            WidgetPod::new(
-                                Image::new(ib.clone())
-                                    .fill_mode(druid::widget::FillStrat::Contain)
-                                    .interpolation_mode(druid::piet::InterpolationMode::Bilinear)
-                                    .fix_width(400.0)
-                                    .align_left()
-                                    .padding(Insets::uniform_xy(50.0, 0.0)),
-                            )
-                            .boxed(),
-                        );
-                        ctx.children_changed();
-                    }
+                if link == link_c && self.try_get_image(link) {
+                    ctx.children_changed();
                 }
                 return;
             }
@@ -68,6 +73,11 @@ impl Widget<Message> for ImageFromLink {
         data: &Message,
         env: &Env,
     ) {
+        if let druid::LifeCycle::WidgetAdded = event {
+            if self.try_get_image(&data.content) {
+                ctx.children_changed();
+            }
+        }
         if let Some(image) = self.image.as_mut() {
             image.lifecycle(ctx, event, data, env);
         } else {
