@@ -72,7 +72,6 @@ impl ConnectionHandler {
         let socket = if let Ok(Ok(socket)) =
             timeout(std::time::Duration::from_secs(5), TcpStream::connect(addr)).await
         {
-            submit_command(event_sink, GuiCommand::Connected);
             socket
         } else {
             submit_command(
@@ -213,6 +212,7 @@ impl ConnectionHandler {
             );
             return;
         }
+        submit_command(event_sink, GuiCommand::Connected);
 
         // Get last 50 messages
         writer

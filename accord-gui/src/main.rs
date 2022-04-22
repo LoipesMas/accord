@@ -12,8 +12,11 @@ use druid::{
     im::Vector,
     kurbo::Insets,
     widget::{Button, Checkbox, Flex, Label, List, TextBox, ViewSwitcher},
-    AppLauncher, Data, Env, Event, ImageBuf, Lens, Widget, WidgetExt, WindowDesc,
+    AppLauncher, Color, Data, Env, Event, FontDescriptor, FontFamily, ImageBuf, Lens, Widget,
+    WidgetExt, WindowDesc,
 };
+
+use serde::{Deserialize, Serialize};
 
 use flexi_logger::Logger;
 
@@ -26,6 +29,29 @@ use connection_handler::*;
 mod config;
 
 //TODO: Loading up past messages
+
+#[derive(Serialize, Deserialize)]
+pub struct Theme {
+    pub background: String,
+    pub text_color1: String,
+    pub color1: String,
+    pub highlight: String,
+    pub border: f64,
+    pub rounding: f64,
+}
+
+impl Theme {
+    pub fn default() -> Self {
+        Self {
+            background: "#050013".to_string(),
+            text_color1: "#6ef3e7".to_string(),
+            color1: "#7521ee29".to_string(),
+            highlight: "#ffffff".to_string(),
+            border: 0.0,
+            rounding: 2.0,
+        }
+    }
+}
 
 #[derive(Debug, Data, Lens, Clone, PartialEq, Eq)]
 pub struct Message {
@@ -70,14 +96,23 @@ fn init_logger() {
         .unwrap();
 }
 
+// This could be not static, but oh well
+static mut THEME: Option<Theme> = None;
+
 fn main() {
     init_logger();
+
+    let config = config::load_config();
+
+    // I solemnly swear this is the only place in which we mutate THEME
+    unsafe {
+        THEME = Some(config.theme.expect("Theme should be loaded from config!"));
+    }
 
     let connection_handler = ConnectionHandler {};
     let (tx, rx) = mpsc::channel(16);
     let dled_images = Arc::new(Mutex::new(HashMap::new()));
     let main_window = WindowDesc::new(ui_builder(Arc::clone(&dled_images))).title("accord");
-    let config = config::load_config();
     let data = AppState {
         current_view: Views::Connect,
         info_label_text: Arc::new("".to_string()),
@@ -139,37 +174,77 @@ fn send_message_click(data: &mut AppState) {
     };
 }
 
+// Less typing
+fn unwrap_from_hex(s: &str) -> Color {
+    Color::from_hex_str(s).unwrap()
+}
+
 fn connect_view() -> impl Widget<AppState> {
+    let font = FontDescriptor::new(FontFamily::SYSTEM_UI).with_size(20.0);
+    let theme = unsafe {
+        // We only read
+        THEME.as_ref().unwrap()
+    };
+
+    let input_label_c = |s: &str| -> druid::widget::Align<AppState> {
+        Label::new(s)
+            .with_font(font.clone())
+            .with_text_color(unwrap_from_hex(&theme.text_color1))
+            .padding(7.0)
+            .center()
+    };
+    let input_box_c = || -> TextBox<Arc<String>> {
+        TextBox::new()
+            .with_font(font.clone())
+            .with_text_color(unwrap_from_hex(&theme.text_color1))
+    };
+
     let info_label = Label::dynamic(|data, _env| format!("{}", data))
-        .with_text_color(druid::Color::YELLOW)
+        .with_text_color(Color::YELLOW)
+        .with_font(font.clone())
+        .padding(5.0)
         .lens(AppState::info_label_text);
-    let label1 = Label::new("Address:").padding(5.0).center();
-    let label2 = Label::new("Username:").padding(5.0).center();
-    let label3 = Label::new("Password:").padding(5.0).center();
+    let label1 = input_label_c("Address:");
+    let label2 = input_label_c("Username:");
+    let label3 = input_label_c("Password:");
     let button = Button::new("Connect")
         .on_click(|_, data, _| connect_click(data))
         .padding(5.0);
-    let input1 = TextBox::new().lens(AppState::input_text1);
-    let input2 = TextBox::new()
-        .lens(AppState::input_text2);
-    let input3 = TextBox::new().lens(AppState::input_text3)
+    let input1 = input_box_c().lens(AppState::input_text1);
+    let input2 = input_box_c().lens(AppState::input_text2);
+    let input3 = input_box_c()
+        .lens(AppState::input_text3)
         .controller(TakeFocusConnect);
-    let checkbox = Checkbox::new("Remember login")
-        .lens(AppState::remember_login);
+    let checkbox = Checkbox::new("Remember login").lens(AppState::remember_login);
 
     Flex::column()
         .with_child(info_label)
-        .with_child(Flex::row().with_child(label1).with_child(input1))
-        .with_child(Flex::row().with_child(label2).with_child(input2))
-        .with_child(Flex::row().with_child(label3).with_child(input3))
-        .with_child(button)
-        .with_child(checkbox)
+        .with_child(
+            Flex::column()
+                .with_child(Flex::row().with_child(label1).with_child(input1))
+                .with_child(Flex::row().with_child(label2).with_child(input2))
+                .with_child(Flex::row().with_child(label3).with_child(input3))
+                .with_child(checkbox)
+                .with_child(button)
+                .padding(10.0)
+                .fix_width(300.0)
+                .background(unwrap_from_hex(&theme.color1))
+                .border(unwrap_from_hex(&theme.highlight), theme.border)
+                .rounded(theme.rounding),
+        )
+        .align_vertical(druid::UnitPoint::new(0.0, 0.25))
 }
 
 fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
-    let font = druid::FontDescriptor::new(druid::FontFamily::SYSTEM_UI).with_size(17.0);
+    let theme = unsafe {
+        // We only read
+        THEME.as_ref().unwrap()
+    };
+
+    let font = FontDescriptor::new(FontFamily::SYSTEM_UI).with_size(17.0);
     let content_label = Label::dynamic(|d: &String, _e: &_| d.clone())
         .with_font(font.clone())
+        .with_text_color(unwrap_from_hex(&theme.text_color1))
         .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
         .lens(Message::content);
     let image_from_link = ImageFromLink::new(content_label, dled_images);
@@ -183,11 +258,15 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
                     format!("{} {}:", data.sender, data.date)
                 }
             })
+            .with_text_color(unwrap_from_hex(&theme.text_color1))
             .with_font(font.with_weight(druid::FontWeight::BOLD)),
         )
         .with_default_spacer()
         .with_flex_child(Flex::column().with_child(image_from_link), 1.0)
-        .background(druid::Color::rgba(0.0, 0.0, 0.0, 0.1))
+        .padding(Insets::uniform_xy(3.0, 5.0))
+        .background(unwrap_from_hex(&theme.color1))
+        .rounded(theme.rounding * 2.0)
+        .border(unwrap_from_hex(&theme.highlight), theme.border)
         .padding(Insets::uniform_xy(0.0, 3.0))
 }
 
@@ -201,7 +280,7 @@ fn try_parse_addr(s: &str) -> Result<SocketAddr, std::net::AddrParseError> {
 
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
     let info_label = Label::dynamic(|data, _env| format!("{}", data))
-        .with_text_color(druid::Color::YELLOW)
+        .with_text_color(Color::YELLOW)
         .lens(AppState::info_label_text);
 
     Flex::column()
@@ -240,9 +319,12 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
 }
 
 fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
+    let theme = unsafe {
+        // We only read
+        THEME.as_ref().unwrap()
+    };
     Flex::column()
-        .with_child(Label::new("accord").with_text_size(40.0))
-        .with_default_spacer()
+        .with_child(Label::new("accord").with_text_size(43.0).padding(5.0))
         .with_flex_child(
             ViewSwitcher::new(
                 |data: &AppState, _env| data.current_view,
@@ -253,6 +335,7 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
             ),
             1.0,
         )
+        .background(unwrap_from_hex(&theme.background))
 }
 
 struct Delegate {
@@ -270,6 +353,7 @@ fn config_from_appstate(data: &AppState) -> Config {
         address,
         username,
         remember_login: data.remember_login,
+        theme: None,
     }
 }
 
