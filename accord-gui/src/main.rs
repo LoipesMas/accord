@@ -157,8 +157,14 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
     Flex::row()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
         .with_child(
-            Label::dynamic(|data: &Message, _env| format!("{} {}:", data.sender, data.date))
-                .with_font(font.with_weight(druid::FontWeight::BOLD)),
+            Label::dynamic(|data: &Message, _env| {
+                if data.sender.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("{} {}:", data.sender, data.date)
+                }
+            })
+            .with_font(font.with_weight(druid::FontWeight::BOLD)),
         )
         .with_default_spacer()
         .with_flex_child(Flex::column().with_child(image_from_link), 1.0)
