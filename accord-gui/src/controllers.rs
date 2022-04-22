@@ -11,6 +11,8 @@ use std::{
 
 const LIST_CHANGED: Selector<Size> = Selector::new("list-changed");
 
+pub const SCROLL: Selector<f64> = Selector::new("scroll");
+
 // "Heavily inspired" by RemoteImage from jpochyla's psst ;]
 pub struct ImageFromLink {
     pub dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
@@ -160,13 +162,38 @@ where
                         (prev_size.height - (child.offset().y + ctx.size().height)).abs() < 1.0;
                 }
                 if should_scroll {
-                    child.scroll_by(druid::Vec2 { x: 0.0, y: 10000.0 });
+                    child.scroll_by(druid::Vec2 { x: 0.0, y: 1e10 });
                     ctx.children_changed();
                 }
             }
+            if let Some(mult) = cmd.get(SCROLL) {
+                    const PG_SCROLL: f64 = 200.0;
+                    child.scroll_by(druid::Vec2 {
+                        x: 0.0,
+                        y: mult*PG_SCROLL,
+                    });
+                    ctx.children_changed();
+            }
         }
+
         child.event(ctx, event, data, env)
     }
+
+    fn lifecycle(
+        &mut self,
+        child: &mut druid::widget::Scroll<Vector<Message>, W>,
+        ctx: &mut druid::LifeCycleCtx,
+        event: &druid::LifeCycle,
+        data: &Vector<Message>,
+        env: &Env,
+    ) {
+        if let druid::LifeCycle::WidgetAdded = event {
+            child.scroll_by(druid::Vec2 {x: 0.0, y: 1e10});
+            ctx.children_changed();
+        }
+        child.lifecycle(ctx, event, data, env)
+    }
+
 }
 
 pub struct ListController;

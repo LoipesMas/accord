@@ -360,7 +360,7 @@ fn config_from_appstate(data: &AppState) -> Config {
 impl druid::AppDelegate<AppState> for Delegate {
     fn event(
         &mut self,
-        _ctx: &mut druid::DelegateCtx,
+        ctx: &mut druid::DelegateCtx,
         _window_id: druid::WindowId,
         event: Event,
         data: &mut AppState,
@@ -374,6 +374,14 @@ impl druid::AppDelegate<AppState> for Delegate {
                         Views::Connect => connect_click(data),
                         Views::Main => send_message_click(data),
                     }
+                    None
+                }
+                Key::PageUp => {
+                    ctx.submit_command(controllers::SCROLL.with(-1.0));
+                    None
+                }
+                Key::PageDown => {
+                    ctx.submit_command(controllers::SCROLL.with(1.0));
                     None
                 }
                 _ => Some(event),
