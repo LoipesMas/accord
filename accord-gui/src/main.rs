@@ -170,9 +170,10 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
                 let dled_images_2 = Arc::clone(&dled_images);
                 message(dled_images_2)
             })
+            .controller(ListController)
             .scroll()
             .vertical()
-            .controller(ScrollController)
+            .controller(ScrollController::new())
             .expand_height()
             .lens(AppState::messages),
             1.0,
