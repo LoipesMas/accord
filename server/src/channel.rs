@@ -48,7 +48,7 @@ impl AccordChannel {
 
         tokio::spawn(async move {
             if let Err(e) = db_connection.await {
-                eprintln!("database connection error: {}", e);
+                log::error!("database connection error: {}", e);
             };
         });
 
@@ -88,7 +88,7 @@ impl AccordChannel {
             let p = self.receiver.recv().await.unwrap();
             match p {
                 Write(p) => {
-                    println!("Message: {:?}", &p);
+                    log::info!("Message: {:?}", &p);
                     if let ClientboundPacket::Message(message) = &p {
                         self.insert_message(message).await;
                     }
@@ -121,7 +121,7 @@ impl AccordChannel {
                             .expect("failed to decrypt")
                     };
                     if t != exp_t {
-                        println!("Encryption handshake failed!");
+                        log::error!("Encryption handshake failed!");
                         tx.send(ConnectionCommand::Close).await.ok();
                         otx.send(Err(())).unwrap();
                     } else {
@@ -153,7 +153,7 @@ impl AccordChannel {
                     }
                 }
                 UserLeft(addr) => {
-                    println!("Connection ended from: {}", addr);
+                    log::info!("Connection ended from: {}", addr);
                     self.txs.remove(&addr);
                     if let Some(username) = self.connected_users.remove(&addr) {
                         for tx_ in self.txs.values() {
@@ -214,7 +214,7 @@ impl AccordChannel {
                     if self.connected_users.values().any(|u| u == &username) {
                         Err("Already logged in.".to_string())
                     } else {
-                        println!("Logged in: {}", username);
+                        log::info!("Logged in: {}", username);
                         Ok(username.clone())
                     }
                 } else {
@@ -225,14 +225,14 @@ impl AccordChannel {
                 self.salt_generator.fill_bytes(&mut salt);
                 let pass_hash = hash_password(password, salt);
                 self.insert_user(&username, &pass_hash, &salt).await;
-                println!("New account: {}", username);
+                log::info!("New account: {}", username);
                 Ok(username.clone())
             };
             if res.is_ok() {
                 self.connected_users.insert(addr, username);
                 self.txs.insert(addr, tx);
             } else {
-                println!("Failed to log in: {}", username);
+                log::info!("Failed to log in: {}", username);
             }
             otx.send(res).unwrap();
         } else {

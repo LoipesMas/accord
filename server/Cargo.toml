@@ -8,6 +8,8 @@ authors = ["LoipesMas"]
 
 [dependencies]
 accord = {path = ".."}
+flexi_logger = "0.22.3"
+log = "*"
 tokio = {version = "1.15.0", features = ["full"]}
 tokio-postgres = "0.7.5"
 sha2 = "0.10.1"

@@ -18,7 +18,7 @@ impl ConnectionWrapper {
         ctx: Sender<ChannelCommand>,
     ) {
         let (tx, rx) = mpsc::channel::<ConnectionCommand>(32);
-        println!("Connection from: {:?}", addr);
+        log::info!("Connection from: {:?}", addr);
         let connection = Connection::<ServerboundPacket, ClientboundPacket>::new(socket);
         let (reader, writer) = connection.split();
         let reader_wrapped = ConnectionReaderWrapper::new(reader, addr, tx, ctx);
@@ -144,14 +144,14 @@ impl ConnectionReaderWrapper {
                 }
             }
             Ok(_) => {
-                println!("Client sent wrong packet during encryption handshake.");
+                log::warn!("Client sent wrong packet during encryption handshake.");
                 self.connection_sender
                     .send(ConnectionCommand::Close)
                     .await
                     .ok(); // it's ok if already closed
             }
             Err(_) => {
-                println!("Error during encryption handshake.");
+                log::warn!("Error during encryption handshake.");
                 self.connection_sender
                     .send(ConnectionCommand::Close)
                     .await
@@ -175,7 +175,7 @@ impl ConnectionReaderWrapper {
                 password,
             } => {
                 if self.username.is_some() {
-                    println!("{} tried to log in while already logged in, ignoring.", un);
+                    log::warn!("{} tried to log in while already logged in, ignoring.", un);
                 } else {
                     self.handle_login(un, password).await;
                 }
@@ -199,7 +199,7 @@ impl ConnectionReaderWrapper {
                                     .await
                                     .unwrap();
                             } else {
-                                println!("Invalid message from {:?}: {}", self.username, m);
+                                log::info!("Invalid message from {:?}: {}", self.username, m);
                             }
                         }
                         // User issued a commend (i.e "/list")
@@ -241,7 +241,7 @@ impl ConnectionReaderWrapper {
                         }
                     }
                 } else {
-                    println!("Someone tried to do something without being logged in");
+                    log::warn!("Someone tried to do something without being logged in");
                 }
             }
         };
@@ -249,14 +249,13 @@ impl ConnectionReaderWrapper {
 
     async fn spawn_loop(mut self) {
         loop {
-            println!("reading packet");
             match self
                 .reader
                 .read_packet(&self.secret, self.nonce_generator.as_mut())
                 .await
             {
                 Ok(p) => {
-                    println!("Got packet: {:?}", p);
+                    log::info!("Got packet: {:?}", p);
                     if let Some(p) = p {
                         self.handle_packet(p).await;
                     }
@@ -270,7 +269,14 @@ impl ConnectionReaderWrapper {
                         .send(ConnectionCommand::Close)
                         .await
                         .ok(); // it's ok if already closed
-                    println!("Err: {:?}", e);
+
+                    // This "error" is expected
+                    if e == "Connection reset by peer" {
+                        log::info!("{}", e);
+                    }
+                    else {
+                        log::error!("Err: {:?}", e);
+                    }
                     break;
                 }
             }
