@@ -10,6 +10,9 @@ authors = ["LoipesMas"]
 accord = {path = ".."}
 flexi_logger = "0.22.3"
 log = "*"
+toml = "0.5.9"
+serde = "*"
+xdg = "2.4.1"
 tokio = {version = "1.15.0", features = ["full"]}
 tokio-postgres = "0.7.5"
 sha2 = "0.10.1"

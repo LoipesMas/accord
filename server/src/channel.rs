@@ -39,8 +39,12 @@ impl AccordChannel {
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
+        let config = crate::config::load_config();
         let (db_client, db_connection) = match tokio_postgres::connect(
-            &format!("host={DB_HOST} user={DB_USER} password={DB_PASS}"),
+            &format!(
+                "host={} user={} password={}",
+                config.db_host, config.db_user, config.db_pass
+            ),
             NoTls,
         )
         .await

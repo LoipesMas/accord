@@ -60,9 +60,12 @@ dependencies = [
  "rand",
  "rand_chacha",
  "rsa",
+ "serde",
  "sha2",
  "tokio",
  "tokio-postgres",
+ "toml",
+ "xdg",
 ]
 
 [[package]]

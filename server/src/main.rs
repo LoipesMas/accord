@@ -19,10 +19,14 @@ fn init_logger() {
 async fn main() {
     init_logger();
 
-    let listener = TcpListener::bind("0.0.0.0:".to_string() + accord::DEFAULT_PORT)
+    let config = accord_server::config::load_config();
+
+    let port = config.port.unwrap_or(accord::DEFAULT_PORT);
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .unwrap();
 
+    log::info!("Listening on port {}.", port);
     let (ctx, crx) = mpsc::channel(32);
 
     AccordChannel::spawn(crx).await;
