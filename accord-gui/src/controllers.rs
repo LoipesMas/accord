@@ -132,12 +132,14 @@ impl Widget<Message> for ImageFromLink {
 
 pub struct ScrollController {
     prev_child_size: Option<Size>,
+    widget_added_time: std::time::Instant,
 }
 
 impl ScrollController {
     pub fn new() -> Self {
         Self {
             prev_child_size: None,
+            widget_added_time: std::time::Instant::now(),
         }
     }
 }
@@ -161,18 +163,23 @@ where
                     should_scroll =
                         (prev_size.height - (child.offset().y + ctx.size().height)).abs() < 1.0;
                 }
+
+                // To make sure it gets scrolled to the bottom at startup
+                if self.widget_added_time.elapsed().as_secs() < 1 {
+                    should_scroll = true;
+                }
                 if should_scroll {
                     child.scroll_by(druid::Vec2 { x: 0.0, y: 1e10 });
                     ctx.children_changed();
                 }
             }
             if let Some(mult) = cmd.get(SCROLL) {
-                    const PG_SCROLL: f64 = 200.0;
-                    child.scroll_by(druid::Vec2 {
-                        x: 0.0,
-                        y: mult*PG_SCROLL,
-                    });
-                    ctx.children_changed();
+                const PG_SCROLL: f64 = 200.0;
+                child.scroll_by(druid::Vec2 {
+                    x: 0.0,
+                    y: mult * PG_SCROLL,
+                });
+                ctx.children_changed();
             }
         }
 
@@ -188,12 +195,12 @@ where
         env: &Env,
     ) {
         if let druid::LifeCycle::WidgetAdded = event {
-            child.scroll_by(druid::Vec2 {x: 0.0, y: 1e10});
+            self.widget_added_time = std::time::Instant::now();
+            child.scroll_by(druid::Vec2 { x: 0.0, y: 1e10 });
             ctx.children_changed();
         }
         child.lifecycle(ctx, event, data, env)
     }
-
 }
 
 pub struct ListController;
