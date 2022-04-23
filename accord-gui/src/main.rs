@@ -402,61 +402,17 @@ impl druid::AppDelegate<AppState> for Delegate {
             match command {
                 GuiCommand::AddMessage(m) => {
                     data.messages.push_back(m.clone());
+
+                    // Try to get image from message link
+                    //
+                    // Note: Now that I think about it, this could be a pretty big vulnerability.
+                    //  It should be at least hidden behind an option.
+                    //  But proper solution would be hosting images on the server (but it's harder)
                     let dled_images = Arc::clone(&self.dled_images);
                     let link = m.content.clone();
                     let event_sink = ctx.get_external_handle();
                     self.rt.spawn(async move {
-                        if !dled_images.lock().unwrap().contains_key(&link) {
-                            let client = reqwest::ClientBuilder::new()
-                                .timeout(std::time::Duration::from_secs(10))
-                                .build()
-                                .unwrap();
-                            let req = client.get(&link).build();
-                            let resp = match req {
-                                Ok(req) => client.execute(req).await,
-                                Err(_) => return,
-                            };
-                            match resp {
-                                Ok(resp) => {
-                                    if resp.status() == reqwest::StatusCode::OK
-                                        && resp
-                                            .headers()
-                                            .get("content-type")
-                                            .map(|v| {
-                                                v.to_str()
-                                                    .map(|s| s.starts_with("image/"))
-                                                    .unwrap_or(false)
-                                            })
-                                            .unwrap_or(false)
-                                    {
-                                        let img_bytes = resp.bytes().await.unwrap();
-                                        // image crate converts jpeg or whatever to raw bytes
-                                        let img = image::load_from_memory(&img_bytes).unwrap();
-                                        let img2 = img.into_rgba8();
-
-                                        let img_buf = ImageBuf::from_raw(
-                                            img2.as_raw().as_slice(),
-                                            druid::piet::ImageFormat::RgbaSeparate,
-                                            img2.width() as usize,
-                                            img2.height() as usize,
-                                        );
-
-                                        let mut dled_images = dled_images.lock().unwrap();
-                                        dled_images.insert(link.clone(), img_buf);
-                                        event_sink
-                                            .submit_command(
-                                                druid::Selector::<String>::new("image_downloaded"),
-                                                link,
-                                                druid::Target::Auto,
-                                            )
-                                            .unwrap();
-                                    }
-                                }
-                                Err(e) => {
-                                    log::warn!("Error when getting image: {}", e);
-                                }
-                            }
-                        }
+                        try_get_image_from_link(&link, dled_images, event_sink).await;
                     });
                 }
                 GuiCommand::Connected => {
@@ -472,4 +428,75 @@ impl druid::AppDelegate<AppState> for Delegate {
         };
         druid::Handled::No
     }
+}
+
+async fn try_get_image_from_link(
+    link: &str,
+    dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
+    event_sink: druid::ExtEventSink,
+) -> bool {
+    if !dled_images.lock().unwrap().contains_key(link) {
+        let client = reqwest::ClientBuilder::new()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+
+        // We get just head first to see if it's an image
+        let req = client.head(link).build();
+        let resp = match req {
+            Ok(req) => client.execute(req).await,
+            Err(_) => return false,
+        };
+        match resp {
+            Ok(resp) => {
+                if resp.status() == reqwest::StatusCode::OK
+                    && resp.headers().get("content-type").map_or(false, |v| {
+                        v.to_str().map_or(false, |s| s.starts_with("image/"))
+                    })
+                    && resp.headers().get("content-length").map_or(false, |v| {
+                        v.to_str().map_or(false, |s| {
+                            s.parse::<u32>().map_or(false, |l| {
+                                l < 31457280 // 30 MB
+                            })
+                        })
+                    })
+                {
+                    let req = client.get(link).build().unwrap();
+
+                    let resp = match client.execute(req).await {
+                        Ok(resp) => resp,
+                        Err(_) => return false,
+                    };
+
+                    let img_bytes = resp.bytes().await.unwrap();
+                    // image crate converts jpeg or whatever to raw bytes
+                    let img = image::load_from_memory(&img_bytes).unwrap();
+                    let img2 = img.into_rgba8();
+
+                    let img_buf = ImageBuf::from_raw(
+                        img2.as_raw().as_slice(),
+                        druid::piet::ImageFormat::RgbaSeparate,
+                        img2.width() as usize,
+                        img2.height() as usize,
+                    );
+
+                    let mut dled_images = dled_images.lock().unwrap();
+                    dled_images.insert(link.to_string(), img_buf);
+                    event_sink
+                        .submit_command(
+                            druid::Selector::<String>::new("image_downloaded"),
+                            link.to_string(),
+                            druid::Target::Auto,
+                        )
+                        .unwrap();
+                }
+            }
+            Err(e) => {
+                log::warn!("Error when getting image: {}", e);
+                return false;
+            }
+        };
+    };
+
+    true
 }
