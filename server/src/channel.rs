@@ -39,12 +39,18 @@ impl AccordChannel {
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
-        let (db_client, db_connection) = tokio_postgres::connect(
+        let (db_client, db_connection) = match tokio_postgres::connect(
             &format!("host={DB_HOST} user={DB_USER} password={DB_PASS}"),
             NoTls,
         )
         .await
-        .unwrap();
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Postgres connection error: {}\n(Make sure that the postgres server is running!)", e);
+                std::process::exit(-1)
+            }
+        };
 
         tokio::spawn(async move {
             if let Err(e) = db_connection.await {
