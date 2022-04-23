@@ -16,10 +16,6 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
-const DB_HOST: &str = "localhost";
-const DB_USER: &str = "postgres";
-const DB_PASS: &str = "supersecretpassword";
-
 #[derive(Debug)]
 pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
