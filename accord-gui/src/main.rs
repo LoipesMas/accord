@@ -90,6 +90,7 @@ struct AppState {
     input_text4: Arc<String>,
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
     messages: Vector<Message>,
+    images_from_links: bool,
 }
 
 fn init_logger() {
@@ -128,6 +129,7 @@ fn main() {
         input_text4: Arc::new("".to_string()),
         connection_handler_tx: Arc::new(tx),
         messages: Vector::new(),
+        images_from_links: config.images_from_links,
     };
     let launcher = AppLauncher::with_window(main_window).delegate(Delegate {
         dled_images,
@@ -228,6 +230,8 @@ fn connect_view() -> impl Widget<AppState> {
         .controller(TakeFocusConnect);
     let checkbox = Checkbox::new("Remember login").lens(AppState::remember_login);
 
+    let checkbox2 = Checkbox::new("Images from links").lens(AppState::images_from_links);
+
     Flex::column()
         .with_child(info_label)
         .with_child(
@@ -237,6 +241,7 @@ fn connect_view() -> impl Widget<AppState> {
                 .with_child(Flex::row().with_child(label3).with_child(input3))
                 .with_child(checkbox)
                 .with_child(button)
+                .with_child(checkbox2)
                 .padding(10.0)
                 .fix_width(300.0)
                 .background(unwrap_from_hex(&theme.color1))
@@ -365,6 +370,7 @@ fn config_from_appstate(data: &AppState) -> Config {
         address,
         username,
         remember_login: data.remember_login,
+        images_from_links: data.images_from_links,
         theme: None,
     }
 }
@@ -418,14 +424,15 @@ impl druid::AppDelegate<AppState> for Delegate {
                     // Try to get image from message link
                     //
                     // Note: Now that I think about it, this could be a pretty big vulnerability.
-                    //  It should be at least hidden behind an option.
-                    //  But proper solution would be hosting images on the server (but it's harder)
-                    let dled_images = Arc::clone(&self.dled_images);
-                    let link = m.content.clone();
-                    let event_sink = ctx.get_external_handle();
-                    self.rt.spawn(async move {
-                        try_get_image_from_link(&link, dled_images, event_sink).await;
-                    });
+                    //  Maybe a better solution would be hosting images on the server?
+                    if data.images_from_links {
+                        let dled_images = Arc::clone(&self.dled_images);
+                        let link = m.content.clone();
+                        let event_sink = ctx.get_external_handle();
+                        self.rt.spawn(async move {
+                            try_get_image_from_link(&link, dled_images, event_sink).await;
+                        });
+                    }
                 }
                 GuiCommand::Connected => {
                     data.info_label_text = Arc::new(String::new());

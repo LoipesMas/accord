@@ -7,6 +7,7 @@ pub struct Config {
     pub address: String,
     pub username: String,
     pub remember_login: bool,
+    pub images_from_links: bool,
     pub theme: Option<crate::Theme>,
 }
 
@@ -17,6 +18,7 @@ impl Default for Config {
             username: Default::default(),
             remember_login: true,
             theme: Some(crate::Theme::default()),
+            images_from_links: false,
         }
     }
 }
