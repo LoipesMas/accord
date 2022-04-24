@@ -13,8 +13,8 @@ use druid::{
     im::Vector,
     kurbo::Insets,
     widget::{Button, Checkbox, Flex, Label, List, TextBox, ViewSwitcher},
-    AppLauncher, Color, Data, Env, Event, FontDescriptor, FontFamily, ImageBuf, Lens, Widget,
-    WidgetExt, WindowDesc,
+    AppLauncher, Color, Data, Env, Event, FontDescriptor, FontFamily, ImageBuf, Lens, UnitPoint,
+    Widget, WidgetExt, WindowDesc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,8 @@ mod config;
 
 #[derive(Serialize, Deserialize)]
 pub struct Theme {
-    pub background: String,
+    pub background1: String,
+    pub background2: String,
     pub text_color1: String,
     pub color1: String,
     pub highlight: String,
@@ -44,7 +45,8 @@ pub struct Theme {
 impl Theme {
     pub fn default() -> Self {
         Self {
-            background: "#050013".to_string(),
+            background1: "#200730".to_string(),
+            background2: "#030009".to_string(),
             text_color1: "#6ef3e7".to_string(),
             color1: "#7521ee29".to_string(),
             highlight: "#ffffff".to_string(),
@@ -248,7 +250,7 @@ fn connect_view() -> impl Widget<AppState> {
                 .border(unwrap_from_hex(&theme.highlight), theme.border)
                 .rounded(theme.rounding),
         )
-        .align_vertical(druid::UnitPoint::new(0.0, 0.25))
+        .align_vertical(UnitPoint::new(0.0, 0.25))
 }
 
 fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
@@ -352,7 +354,14 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
             ),
             1.0,
         )
-        .background(unwrap_from_hex(&theme.background))
+        .background(druid::LinearGradient::new(
+            UnitPoint::BOTTOM,
+            UnitPoint::TOP,
+            (
+                unwrap_from_hex(&theme.background2),
+                unwrap_from_hex(&theme.background1),
+            ),
+        ))
 }
 
 struct Delegate {
