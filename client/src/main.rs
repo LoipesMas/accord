@@ -260,6 +260,10 @@ async fn reading_loop(
                 }
                 println!("-------------");
             }
+            Ok(Some(ClientboundPacket::ImageMessage(im))) => {
+                let time = chrono::Local.timestamp(im.time as i64, 0);
+                println!("{} sent an image. ({})", im.sender, time.format("%H:%M %d-%m"))
+            }
             Ok(Some(p)) => {
                 println!("!!Unhandled packet: {:?}", p);
             }
