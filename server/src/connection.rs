@@ -202,6 +202,19 @@ impl ConnectionReaderWrapper {
                                 log::info!("Invalid message from {:?}: {}", self.username, m);
                             }
                         }
+                        // User sends an image
+                        ImageMessage(im) => {
+                            let p =
+                                ClientboundPacket::ImageMessage(accord::packets::ImageMessage {
+                                    image_bytes: im,
+                                    sender: self.username.clone().unwrap(),
+                                    time: current_time_as_sec(),
+                                });
+                            self.channel_sender
+                                .send(ChannelCommand::Write(p))
+                                .await
+                                .unwrap();
+                        }
                         // User issued a commend (i.e "/list")
                         Command(command) => match command.as_str() {
                             "list" => {
@@ -231,7 +244,7 @@ impl ConnectionReaderWrapper {
                             let mut messages = orx.await.unwrap();
                             for m in messages.drain(..).rev() {
                                 self.connection_sender
-                                    .send(ConnectionCommand::Write(ClientboundPacket::Message(m)))
+                                    .send(ConnectionCommand::Write(m))
                                     .await
                                     .unwrap();
                             }
@@ -255,7 +268,12 @@ impl ConnectionReaderWrapper {
                 .await
             {
                 Ok(p) => {
-                    log::info!("Got packet: {:?}", p);
+                    match p {
+                        Some(ServerboundPacket::ImageMessage(_)) => {
+                            log::info!("Got image packet");
+                        }
+                        _ => log::info!("Got packet: {:?}", p),
+                    }
                     if let Some(p) = p {
                         self.handle_packet(p).await;
                     }

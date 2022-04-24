@@ -33,7 +33,7 @@ pub enum ChannelCommand {
     UserJoined(String),
     UserLeft(SocketAddr),
     UsersQuery(SocketAddr),
-    FetchMessages(i64, i64, OSender<Vec<accord::packets::Message>>),
+    FetchMessages(i64, i64, OSender<Vec<ClientboundPacket>>),
 }
 
 pub type LoginResult = Result<String, String>;

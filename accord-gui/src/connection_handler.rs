@@ -10,7 +10,7 @@ use tokio::{
 
 use accord::{connection::*, packets::*, ENC_TOK_LEN, SECRET_LEN};
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use rand::{rngs::OsRng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -26,12 +26,14 @@ pub enum GuiCommand {
     AddMessage(GMessage),
     Connected,
     ConnectionEnded(String),
+    SendImage(Arc<Vec<u8>>),
+    StoreImage(String, Arc<Vec<u8>>),
 }
 
 #[derive(Debug)]
 pub enum ConnectionHandlerCommand {
     Connect(SocketAddr, String, String),
-    Send(String),
+    Write(accord::packets::ServerboundPacket),
 }
 
 pub struct ConnectionHandler;
@@ -260,6 +262,7 @@ impl ConnectionHandler {
                             sender,
                             date: time.format("(%H:%M %d-%m)").to_string(),
                             content: text,
+                            is_image: false,
                         }),
                     );
                 }
@@ -294,6 +297,31 @@ impl ConnectionHandler {
                         GuiCommand::AddMessage(GMessage::just_content(s)),
                     );
                 }
+                Ok(Some(ClientboundPacket::ImageMessage(im))) => {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&im.image_bytes);
+
+                    // Hash to string
+                    let hash = hasher.finalize()[..16]
+                        .iter()
+                        .fold("".to_string(), |accum, item| {
+                            accum + &format!("{:02x}", item)
+                        });
+
+                    let time = chrono::Local.timestamp(im.time as i64, 0);
+                    submit_command(
+                        event_sink,
+                        GuiCommand::StoreImage(hash.clone(), Arc::new(im.image_bytes)),
+                    );
+                    let m = GMessage {
+                        content: hash,
+                        sender: im.sender,
+                        date: time.format("(%H:%M %d-%m)").to_string(),
+                        is_image: true,
+                    };
+                    submit_command(event_sink, GuiCommand::AddMessage(m));
+                }
                 Ok(Some(p)) => {
                     error!("!!Unhandled packet: {:?}", p);
                 }
@@ -321,12 +349,7 @@ impl ConnectionHandler {
                 r = gui_rx.recv() => {
                     if let Some(c) = r {
                         match c {
-                            ConnectionHandlerCommand::Send(s) => {
-                                let p = if let Some(command) = s.strip_prefix('/') {
-                                    ServerboundPacket::Command(command.to_string())
-                                } else {
-                                    ServerboundPacket::Message(s.to_string())
-                                };
+                            ConnectionHandlerCommand::Write(p) => {
                                 writer.write_packet(p, &secret, nonce_generator.as_mut()).await.unwrap();
                             },
                             c => {
@@ -345,10 +368,6 @@ impl ConnectionHandler {
 
 fn submit_command(event_sink: &ExtEventSink, info: GuiCommand) {
     event_sink
-        .submit_command(
-            druid::Selector::<GuiCommand>::new("gui_command"),
-            info,
-            druid::Target::Global,
-        )
+        .submit_command(crate::GUI_COMMAND, info, druid::Target::Global)
         .unwrap();
 }

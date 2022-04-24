@@ -15,6 +15,7 @@ serde = "*"
 xdg = "2.4.1"
 tokio = {version = "1.15.0", features = ["full"]}
 tokio-postgres = "0.7.5"
+futures = "0.3.21"
 sha2 = "0.10.1"
 rand = "0.8.4"
 rsa = "0.5.0"

@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use accord::packets::ServerboundPacket;
 use config::Config;
 use tokio::sync::mpsc;
 
@@ -58,6 +59,7 @@ pub struct Message {
     pub sender: String,
     pub date: String,
     pub content: String,
+    pub is_image: bool,
 }
 
 impl Message {
@@ -66,6 +68,7 @@ impl Message {
             sender: String::new(),
             date: String::new(),
             content,
+            is_image: false,
         }
     }
 }
@@ -98,6 +101,8 @@ fn init_logger() {
 
 // This could be not static, but oh well
 static mut THEME: Option<Theme> = None;
+
+pub const GUI_COMMAND: druid::Selector<GuiCommand> = druid::Selector::new("gui_command");
 
 fn main() {
     init_logger();
@@ -164,9 +169,15 @@ fn connect_click(data: &mut AppState) {
 }
 
 fn send_message_click(data: &mut AppState) {
-    if accord::utils::verify_message(&*data.input_text4) {
+    let s = data.input_text4.clone();
+    if accord::utils::verify_message(&*s) {
+        let p = if let Some(command) = s.strip_prefix('/') {
+            ServerboundPacket::Command(command.to_string())
+        } else {
+            ServerboundPacket::Message(s.to_string())
+        };
         data.connection_handler_tx
-            .blocking_send(ConnectionHandlerCommand::Send(data.input_text4.to_string()))
+            .blocking_send(ConnectionHandlerCommand::Write(p))
             .unwrap();
         data.input_text4 = Arc::new(String::new());
     } else {
@@ -306,7 +317,8 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
                     TextBox::multiline()
                         .lens(AppState::input_text4)
                         .expand_width()
-                        .controller(TakeFocusMain),
+                        .controller(TakeFocusMain)
+                        .controller(MessageTextBoxController),
                     1.0,
                 )
                 .with_default_spacer()
@@ -398,7 +410,7 @@ impl druid::AppDelegate<AppState> for Delegate {
         data: &mut AppState,
         _env: &Env,
     ) -> druid::Handled {
-        if let Some(command) = cmd.get::<GuiCommand>(druid::Selector::new("gui_command")) {
+        if let Some(command) = cmd.get(GUI_COMMAND) {
             match command {
                 GuiCommand::AddMessage(m) => {
                     data.messages.push_back(m.clone());
@@ -423,6 +435,22 @@ impl druid::AppDelegate<AppState> for Delegate {
                     data.messages = Vector::new();
                     data.info_label_text = Arc::new(m.to_string());
                     data.current_view = Views::Connect;
+                }
+                GuiCommand::SendImage(image_bytes) => {
+                    let v = image_bytes.to_vec();
+                    let p = ServerboundPacket::ImageMessage(v);
+                    data.connection_handler_tx
+                        .blocking_send(ConnectionHandlerCommand::Write(p))
+                        .unwrap();
+                }
+                GuiCommand::StoreImage(hash, img_bytes) => {
+                    let img_buf = ImageBuf::from_data(img_bytes).unwrap();
+
+                    let mut dled_images = self.dled_images.lock().unwrap();
+                    dled_images.insert(hash.to_string(), img_buf);
+                    ctx.submit_command(
+                        druid::Selector::<String>::new("image_downloaded").with(hash.to_string()),
+                    );
                 }
             };
         };
@@ -469,16 +497,7 @@ async fn try_get_image_from_link(
                     };
 
                     let img_bytes = resp.bytes().await.unwrap();
-                    // image crate converts jpeg or whatever to raw bytes
-                    let img = image::load_from_memory(&img_bytes).unwrap();
-                    let img2 = img.into_rgba8();
-
-                    let img_buf = ImageBuf::from_raw(
-                        img2.as_raw().as_slice(),
-                        druid::piet::ImageFormat::RgbaSeparate,
-                        img2.width() as usize,
-                        img2.height() as usize,
-                    );
+                    let img_buf = ImageBuf::from_data(&img_bytes).unwrap();
 
                     let mut dled_images = dled_images.lock().unwrap();
                     dled_images.insert(link.to_string(), img_buf);

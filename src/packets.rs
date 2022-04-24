@@ -8,6 +8,13 @@ pub struct Message {
     pub time: u64,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
+pub struct ImageMessage {
+    pub sender: String,
+    pub time: u64,
+    pub image_bytes: Vec<u8>,
+}
+
 pub trait Packet {
     fn serialized(&self) -> Vec<u8>;
     fn deserialized(buf: &[u8]) -> Result<(Self, &[u8]), rmp_serde::decode::Error>
@@ -22,6 +29,7 @@ pub enum ServerboundPacket {
     EncryptionConfirm(Vec<u8>, Vec<u8>), // encrypted secret and token
     Login { username: String, password: String },
     Message(String),
+    ImageMessage(Vec<u8>),
     Command(String),
     FetchMessages(i64, i64),
 }
@@ -50,6 +58,7 @@ pub enum ClientboundPacket {
     UserLeft(String),
     UsersOnline(Vec<String>),
     Message(Message),
+    ImageMessage(ImageMessage),
 }
 
 impl Packet for ClientboundPacket {

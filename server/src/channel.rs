@@ -62,7 +62,15 @@ impl AccordChannel {
         // (we just error if it already exists :) )
         let _ = db_client
             .execute(
-                "CREATE TABLE accounts (username varchar(255) NOT NULL UNIQUE, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
+                "CREATE TABLE accounts (username varchar(255) NOT NULL PRIMARY KEY, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
+                &[],
+            )
+            .await;
+
+        // Try to create table for images
+        let _ = db_client
+            .execute(
+                "CREATE TABLE images ( image_hash INT PRIMARY KEY, data BYTEA NOT NULL);",
                 &[],
             )
             .await;
@@ -71,7 +79,7 @@ impl AccordChannel {
         // (we just error if it already exists :) )
         let _ = db_client
             .execute(
-        "CREATE TABLE messages ( sender varchar(255) NOT NULL, content varchar(1023) NOT NULL, send_time bigint NOT NULL, CONSTRAINT fk_username FOREIGN KEY(sender) REFERENCES accounts(username));",
+        "CREATE TABLE messages ( sender varchar(255) NOT NULL, content varchar(1023), send_time bigint NOT NULL, image_hash INT, CONSTRAINT fk_image_hash FOREIGN KEY(image_hash) REFERENCES images(image_hash), CONSTRAINT fk_username FOREIGN KEY(sender) REFERENCES accounts(username));",
         &[],
         ).await;
 
@@ -94,9 +102,20 @@ impl AccordChannel {
             let p = self.receiver.recv().await.unwrap();
             match p {
                 Write(p) => {
-                    log::info!("Message: {:?}", &p);
-                    if let ClientboundPacket::Message(message) = &p {
-                        self.insert_message(message).await;
+                    match p {
+                        ClientboundPacket::ImageMessage(ref im) => {
+                            log::info!("Image from {}", im.sender);
+                        }
+                        _ => log::info!("Message: {:?}", &p),
+                    }
+                    match &p {
+                        ClientboundPacket::Message(message) => {
+                            self.insert_message(message).await;
+                        }
+                        ClientboundPacket::ImageMessage(im) => {
+                            self.insert_image_message(im).await;
+                        }
+                        _ => (),
                     }
                     for (addr, tx_) in &self.txs {
                         // Only send to logged in users
@@ -185,14 +204,23 @@ impl AccordChannel {
                 FetchMessages(o, n, otx) => {
                     let n = n.min(64); // Clamp so we don't query and send too much
                     let messages_rows = self.fetch_messages(o, n).await;
-                    let messages = messages_rows
-                        .iter()
-                        .map(|r| accord::packets::Message {
-                            text: r.get("content"),
-                            sender: r.get("sender"),
-                            time: r.get::<_, i64>("send_time") as u64,
-                        })
-                        .collect();
+                    let messages = messages_rows.iter().map(|r| async {
+                        if let Some(hash) = r.get::<_, Option<i32>>("image_hash") {
+                            let image_bytes = self.fetch_image(hash).await;
+                            ClientboundPacket::ImageMessage(accord::packets::ImageMessage {
+                                image_bytes,
+                                sender: r.get("sender"),
+                                time: r.get::<_, i64>("send_time") as u64,
+                            })
+                        } else {
+                            ClientboundPacket::Message(accord::packets::Message {
+                                text: r.get("content"),
+                                sender: r.get("sender"),
+                                time: r.get::<_, i64>("send_time") as u64,
+                            })
+                        }
+                    });
+                    let messages = futures::future::join_all(messages).await;
                     otx.send(messages).unwrap();
                 }
             }
@@ -272,6 +300,34 @@ impl AccordChannel {
             .unwrap();
     }
 
+    async fn insert_image_message(&self, message: &accord::packets::ImageMessage) {
+        use sha2::{Digest, Sha256};
+        use tokio_postgres::types::private::read_be_i32;
+
+        // Get hash of the image as i32
+        let mut hasher = Sha256::new();
+        hasher.update(&message.image_bytes);
+        let hash = read_be_i32(&mut &hasher.finalize()[..4]).unwrap();
+
+        // Insert image into db
+        self.db_client
+            .execute(
+                "INSERT INTO images VALUES ($1, $2)",
+                &[&hash, &message.image_bytes],
+            )
+            .await
+            .ok(); // It's ok if the image already exists in db
+
+        // Inser message with hash as a foreign key
+        self.db_client
+            .execute(
+                "INSERT INTO messages VALUES ($1, '', $2, $3)",
+                &[&message.sender, &(message.time as i64), &hash],
+            )
+            .await
+            .unwrap();
+    }
+
     async fn fetch_messages(&self, offset: i64, count: i64) -> Vec<tokio_postgres::Row> {
         self.db_client
             .query(
@@ -280,6 +336,16 @@ impl AccordChannel {
             )
             .await
             .unwrap()
+    }
+
+    /// Given hash, fetch image bytes from db
+    async fn fetch_image(&self, hash: i32) -> Vec<u8> {
+        let r = self
+            .db_client
+            .query("SELECT data FROM images WHERE image_hash=$1", &[&hash])
+            .await
+            .unwrap();
+        r.get(0).unwrap().get::<_, Vec<u8>>("data")
     }
 }
 

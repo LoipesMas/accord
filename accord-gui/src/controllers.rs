@@ -1,4 +1,4 @@
-use crate::{GuiCommand, Message};
+use crate::{GuiCommand, Message, GUI_COMMAND};
 use druid::{
     im::Vector,
     widget::{Controller, Image},
@@ -161,11 +161,11 @@ where
                 let mut should_scroll = true;
                 if let Some(prev_size) = self.prev_child_size.replace(*size) {
                     should_scroll =
-                        (prev_size.height - (child.offset().y + ctx.size().height)).abs() < 1.0;
+                        (prev_size.height - (child.offset().y + ctx.size().height)).abs() < 50.0;
                 }
 
                 // To make sure it gets scrolled to the bottom at startup
-                if self.widget_added_time.elapsed().as_secs() < 1 {
+                if self.widget_added_time.elapsed().as_secs() < 3 {
                     should_scroll = true;
                 }
                 if should_scroll {
@@ -223,14 +223,12 @@ impl Controller<Vector<Message>, druid::widget::List<Message>> for ListControlle
 
 pub struct TakeFocusConnect;
 
-impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
+impl<T, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
     fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
         if let Event::WindowConnected = event {
             ctx.request_focus();
         } else if let Event::Command(command) = event {
-            if let Some(GuiCommand::ConnectionEnded(_)) =
-                command.get::<GuiCommand>(Selector::new("gui_command"))
-            {
+            if let Some(GuiCommand::ConnectionEnded(_)) = command.get(GUI_COMMAND) {
                 ctx.request_focus();
             }
         }
@@ -240,13 +238,30 @@ impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
 
 pub struct TakeFocusMain;
 
-impl<T: std::fmt::Debug, W: Widget<T>> Controller<T, W> for TakeFocusMain {
+impl<T, W: Widget<T>> Controller<T, W> for TakeFocusMain {
     fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
         if let Event::Command(command) = event {
-            if let Some(GuiCommand::Connected) =
-                command.get::<GuiCommand>(Selector::new("gui_command"))
-            {
+            if let Some(GuiCommand::Connected) = command.get(GUI_COMMAND) {
                 ctx.request_focus();
+            }
+        }
+        child.event(ctx, event, data, env)
+    }
+}
+
+pub struct MessageTextBoxController;
+
+impl<T, W: Widget<T>> Controller<T, W> for MessageTextBoxController {
+    fn event(&mut self, child: &mut W, ctx: &mut EventCtx, event: &Event, data: &mut T, env: &Env) {
+        if let Event::Paste(clipboard) = event {
+            let supported_types = &["image/png", "image/jpeg"];
+            let best_available_type = clipboard.preferred_format(supported_types);
+
+            if let Some(format) = best_available_type {
+                let data = clipboard
+                    .get_format(format)
+                    .expect("I promise not to unwrap in production");
+                ctx.submit_command(GUI_COMMAND.with(GuiCommand::SendImage(Arc::new(data))));
             }
         }
         child.event(ctx, event, data, env)
