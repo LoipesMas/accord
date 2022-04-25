@@ -29,6 +29,9 @@ use connection_handler::*;
 
 mod config;
 
+mod widgets;
+use widgets::*;
+
 //TODO: Loading up past messages
 
 #[derive(Serialize, Deserialize)]
@@ -39,7 +42,6 @@ pub struct Theme {
     pub color1: String,
     pub highlight: String,
     pub border: f64,
-    pub rounding: f64,
 }
 
 impl Theme {
@@ -49,9 +51,8 @@ impl Theme {
             background2: "#030009".to_string(),
             text_color1: "#6ef3e7".to_string(),
             color1: "#7521ee29".to_string(),
-            highlight: "#ffffff".to_string(),
-            border: 0.0,
-            rounding: 2.0,
+            highlight: "#77777777".to_string(),
+            border: 4.5,
         }
     }
 }
@@ -103,6 +104,7 @@ fn init_logger() {
 }
 
 // This could be not static, but oh well
+// Maybe this should be just set in Env?
 static mut THEME: Option<Theme> = None;
 
 pub const GUI_COMMAND: druid::Selector<GuiCommand> = druid::Selector::new("gui_command");
@@ -235,6 +237,12 @@ fn connect_view() -> impl Widget<AppState> {
     let checkbox2 = Checkbox::new("Images from links").lens(AppState::images_from_links);
 
     Flex::column()
+        .with_child(
+            Label::new("accord")
+                .with_text_size(70.0)
+                .padding((5.0, 100.0, 5.0, 0.0))
+                .center(),
+        )
         .with_child(info_label)
         .with_child(
             Flex::column()
@@ -246,9 +254,10 @@ fn connect_view() -> impl Widget<AppState> {
                 .with_child(checkbox2)
                 .padding(10.0)
                 .fix_width(300.0)
-                .background(unwrap_from_hex(&theme.color1))
-                .border(unwrap_from_hex(&theme.highlight), theme.border)
-                .rounded(theme.rounding),
+                .padding((-30.0, 0.0, -20.0, 0.0))
+                .cut_corners(0.0, 20.0, 20.0, 0.0)
+                .with_border(unwrap_from_hex(&theme.highlight), theme.border)
+                .with_background(unwrap_from_hex(&theme.color1)),
         )
         .align_vertical(UnitPoint::new(0.0, 0.25))
 }
@@ -281,11 +290,11 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
         )
         .with_default_spacer()
         .with_flex_child(Flex::column().with_child(image_from_link), 1.0)
-        .padding(Insets::uniform_xy(3.0, 5.0))
-        .background(unwrap_from_hex(&theme.color1))
-        .rounded(theme.rounding * 2.0)
-        .border(unwrap_from_hex(&theme.highlight), theme.border)
-        .padding(Insets::uniform_xy(0.0, 3.0))
+        .padding(Insets::uniform_xy(5.0, 5.0))
+        .cut_corners_sym(10.0)
+        .with_background(unwrap_from_hex(&theme.color1))
+        .with_border(unwrap_from_hex(&theme.highlight), theme.border)
+        .padding(Insets::uniform_xy(0.0, 1.0))
 }
 
 fn try_parse_addr(s: &str) -> Result<SocketAddr, std::net::AddrParseError> {
@@ -303,6 +312,12 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
 
     Flex::column()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
+        .with_child(
+            Label::new("accord")
+                .with_text_size(50.0)
+                .padding((5.0, 5.0, 5.0, 7.0))
+                .center(),
+        )
         .with_child(info_label)
         .with_flex_child(
             List::new(move || {
@@ -343,7 +358,6 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
         THEME.as_ref().unwrap()
     };
     Flex::column()
-        .with_child(Label::new("accord").with_text_size(43.0).padding(5.0))
         .with_flex_child(
             ViewSwitcher::new(
                 |data: &AppState, _env| data.current_view,
