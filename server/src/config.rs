@@ -7,6 +7,7 @@ pub struct Config {
     pub db_host: String,
     pub db_user: String,
     pub db_pass: String,
+    pub db_dbname: String,
     pub port: Option<u16>,
 }
 
@@ -16,6 +17,7 @@ impl Default for Config {
             db_host: Default::default(),
             db_user: Default::default(),
             db_pass: Default::default(),
+            db_dbname: Default::default(),
             port: None,
         }
     }

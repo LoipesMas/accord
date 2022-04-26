@@ -38,8 +38,8 @@ impl AccordChannel {
         let config = crate::config::load_config();
         let (db_client, db_connection) = match tokio_postgres::connect(
             &format!(
-                "host={} user={} password={}",
-                config.db_host, config.db_user, config.db_pass
+                "host='{}' user='{}' password='{}' dbname='{}'",
+                config.db_host, config.db_user, config.db_pass, config.db_dbname,
             ),
             NoTls,
         )
