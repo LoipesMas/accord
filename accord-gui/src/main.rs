@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use druid::{
     im::Vector,
     kurbo::Insets,
-    widget::{Button, Checkbox, Flex, Label, List, TextBox, ViewSwitcher},
+    widget::{Button, Checkbox, Flex, Label, List, Svg, SvgData, TextBox, ViewSwitcher},
     AppLauncher, Color, Data, Env, Event, FontDescriptor, FontFamily, ImageBuf, Lens, UnitPoint,
     Widget, WidgetExt, WindowDesc,
 };
@@ -218,34 +218,59 @@ fn connect_view() -> impl Widget<AppState> {
     let button = Button::new("Connect")
         .on_click(|_, data, _| connect_click(data))
         .padding(5.0);
-    let input1 = input_box_c().lens(AppState::input_text1);
-    let input2 = input_box_c().lens(AppState::input_text2);
+    let input1 = input_box_c().lens(AppState::input_text1).expand_width();
+    let input2 = input_box_c().lens(AppState::input_text2).expand_width();
     let input3 = input_box_c()
         .lens(AppState::input_text3)
+        .expand_width()
         .controller(TakeFocusConnect);
     let checkbox = Checkbox::new("Remember login").lens(AppState::remember_login);
 
     let checkbox2 = Checkbox::new("Images from links").lens(AppState::images_from_links);
 
+    let accord_logo_data = match include_str!("resources/accord-logo.svg").parse::<SvgData>() {
+        Ok(svg) => svg,
+        Err(err) => {
+            log::error!("{}", err);
+            log::error!("Using an empty SVG instead.");
+            SvgData::default()
+        }
+    };
+    let accord_logo = Svg::new(accord_logo_data).fill_mode(druid::widget::FillStrat::ScaleDown);
+
     Flex::column()
         .with_child(
-            Label::new("accord")
-                .with_text_size(70.0)
-                .padding((5.0, 100.0, 5.0, 0.0))
-                .center(),
+            accord_logo
+                .fix_width(300.0)
+                .align_vertical(UnitPoint::BOTTOM),
         )
         .with_child(info_label)
         .with_child(
             Flex::column()
-                .with_child(Flex::row().with_child(label1).with_child(input1))
-                .with_child(Flex::row().with_child(label2).with_child(input2))
-                .with_child(Flex::row().with_child(label3).with_child(input3))
+                .with_child(
+                    Flex::row()
+                        .with_child(label1)
+                        .with_flex_child(input1, 1.0)
+                        .fix_width(250.0),
+                )
+                .with_child(
+                    Flex::row()
+                        .with_child(label2)
+                        .with_flex_child(input2, 1.0)
+                        .fix_width(250.0),
+                )
+                .with_child(
+                    Flex::row()
+                        .with_child(label3)
+                        .with_flex_child(input3, 1.0)
+                        .fix_width(250.0),
+                )
                 .with_child(checkbox)
                 .with_child(button)
                 .with_child(checkbox2)
                 .padding(10.0)
-                .fix_width(300.0)
-                .padding((-30.0, 0.0, -20.0, 0.0))
+                .fix_width(350.0)
+                .padding((-30.0, 5.0, -20.0, 5.0))
                 .cut_corners(0.0, 20.0, 20.0, 0.0)
                 .with_border(unwrap_from_hex(&theme.highlight), theme.border)
                 .with_background(unwrap_from_hex(&theme.color1)),
@@ -301,14 +326,19 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
         .with_text_color(Color::YELLOW)
         .lens(AppState::info_label_text);
 
+    let accord_logo_data = match include_str!("resources/accord-logo.svg").parse::<SvgData>() {
+        Ok(svg) => svg,
+        Err(err) => {
+            log::error!("{}", err);
+            log::error!("Using an empty SVG instead.");
+            SvgData::default()
+        }
+    };
+    let accord_logo = Svg::new(accord_logo_data).fill_mode(druid::widget::FillStrat::ScaleDown);
+
     Flex::column()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
-        .with_child(
-            Label::new("accord")
-                .with_text_size(50.0)
-                .padding((5.0, 5.0, 5.0, 7.0))
-                .center(),
-        )
+        .with_child(accord_logo.fix_height(80.0).center())
         .with_child(info_label)
         .with_flex_child(
             List::new(move || {
