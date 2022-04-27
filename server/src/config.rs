@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,11 @@ pub struct Config {
     pub db_pass: String,
     pub db_dbname: String,
     pub port: Option<u16>,
+    pub operators: HashSet<String>,
+    pub whitelist_on: bool,
+    pub whitelist: HashSet<String>,
+    pub banned_users: HashSet<String>,
+    pub allow_new_accounts: bool,
 }
 
 impl Default for Config {
@@ -18,7 +24,12 @@ impl Default for Config {
             db_user: Default::default(),
             db_pass: Default::default(),
             db_dbname: Default::default(),
-            port: None,
+            port: Some(accord::DEFAULT_PORT),
+            operators: Default::default(),
+            whitelist_on: false,
+            whitelist: Default::default(),
+            banned_users: Default::default(),
+            allow_new_accounts: true,
         }
     }
 }
@@ -42,12 +53,12 @@ fn config_path_dir() -> PathBuf {
     todo!("%APPDATA%/accord-server ?")
 }
 
-pub fn save_config(config: Config) -> std::io::Result<()> {
+pub fn save_config(config: &Config) -> std::io::Result<()> {
     log::info!("Saving config.");
     let config_path = config_path();
     std::fs::create_dir_all(config_path_dir()).unwrap();
 
-    let toml = toml::to_string(&config).unwrap();
+    let toml = toml::to_string(config).unwrap();
     std::fs::write(config_path, &toml)
 }
 
@@ -59,7 +70,7 @@ pub fn load_config() -> Config {
         toml::from_str(&toml).unwrap()
     } else {
         log::info!("Failed to load config, using default and saving default.");
-        save_config(Config::default()).unwrap();
+        save_config(&Config::default()).unwrap();
         Config::default()
     };
     config

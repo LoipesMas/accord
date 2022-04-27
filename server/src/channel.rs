@@ -7,6 +7,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use tokio_postgres::{Client as DBClient, NoTls};
 
+use crate::config::{save_config, Config};
+
 use super::commands::*;
 
 use rand::rngs::OsRng;
@@ -16,7 +18,6 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
-#[derive(Debug)]
 pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>>,
@@ -25,17 +26,17 @@ pub struct AccordChannel {
     db_client: DBClient,
     priv_key: RsaPrivateKey,
     pub_key: RsaPublicKey,
+    config: Config,
 }
 
 impl AccordChannel {
-    pub async fn spawn(receiver: Receiver<ChannelCommand>) {
+    pub async fn spawn(receiver: Receiver<ChannelCommand>, config: Config) {
         // Setup
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
-        let config = crate::config::load_config();
         let (db_client, db_connection) = match tokio_postgres::connect(
             &format!(
                 "host='{}' user='{}' password='{}' dbname='{}'",
@@ -91,6 +92,7 @@ impl AccordChannel {
             db_client,
             priv_key,
             pub_key,
+            config,
         };
         // Launch channel loop
         tokio::spawn(s.channel_loop());
@@ -223,6 +225,55 @@ impl AccordChannel {
                     let messages = futures::future::join_all(messages).await;
                     otx.send(messages).unwrap();
                 }
+                CheckPermissions(username, otx) => {
+                    let perms = UserPermissions {
+                        operator: self.config.operators.contains(&username),
+                        banned: self.config.banned_users.contains(&username),
+                        whitelisted: self.config.whitelist.contains(&username),
+                    };
+                    otx.send(perms).unwrap();
+                }
+                KickUser(username) => {
+                    self.kick_user(&username).await;
+                }
+                BanUser(username, switch) => {
+                    if switch {
+                        self.kick_user(&username).await;
+                        self.config.banned_users.insert(username);
+                    } else {
+                        self.config.banned_users.remove(&username);
+                    }
+                    save_config(&self.config).unwrap();
+                }
+                WhitelistUser(username, switch) => {
+                    if switch {
+                        self.config.whitelist.insert(username);
+                    } else {
+                        self.config.whitelist.remove(&username);
+                    }
+                    save_config(&self.config).unwrap();
+                }
+                SetWhitelist(state) => {
+                    self.config.whitelist_on = state;
+                    save_config(&self.config).unwrap();
+                }
+                SetAllowNewAccounts(state) => {
+                    self.config.allow_new_accounts = state;
+                    save_config(&self.config).unwrap();
+                }
+            };
+        }
+    }
+
+    async fn kick_user(&mut self, username: &str) {
+        for (addr, un) in self.connected_users.iter() {
+            if un == username {
+                self.txs
+                    .get(addr)
+                    .unwrap()
+                    .send(ConnectionCommand::Close)
+                    .await
+                    .unwrap();
             }
         }
     }
@@ -238,7 +289,12 @@ impl AccordChannel {
         {
             let res = if !verify_username(&username) {
                 Err("Invalid username!".to_string())
+            } else if self.config.banned_users.contains(&username) {
+                Err("User banned.".to_string())
+            } else if self.config.whitelist_on && !self.config.whitelist.contains(&username) {
+                Err("User not on whitelist.".to_string())
             } else if let Some(row) = self.get_user(&username).await {
+                // Account exists
                 let salt_s: String = row.get("salt");
                 let salt = base64::decode(salt_s).unwrap();
                 let pass_hash = hash_password(password, salt);
@@ -255,12 +311,17 @@ impl AccordChannel {
                     Err("Incorrect password".to_string())
                 }
             } else {
-                let mut salt = [0; 64];
-                self.salt_generator.fill_bytes(&mut salt);
-                let pass_hash = hash_password(password, salt);
-                self.insert_user(&username, &pass_hash, &salt).await;
-                log::info!("New account: {}", username);
-                Ok(username.clone())
+                // New account
+                if self.config.allow_new_accounts {
+                    let mut salt = [0; 64];
+                    self.salt_generator.fill_bytes(&mut salt);
+                    let pass_hash = hash_password(password, salt);
+                    self.insert_user(&username, &pass_hash, &salt).await;
+                    log::info!("New account: {}", username);
+                    Ok(username.clone())
+                } else {
+                    Err("Account creation disabled.".to_string())
+                }
             };
             if res.is_ok() {
                 self.connected_users.insert(addr, username);

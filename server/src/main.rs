@@ -29,7 +29,7 @@ async fn main() {
     log::info!("Listening on port {}.", port);
     let (ctx, crx) = mpsc::channel(32);
 
-    AccordChannel::spawn(crx).await;
+    AccordChannel::spawn(crx, config).await;
 
     log::info!("Server ready!");
     loop {

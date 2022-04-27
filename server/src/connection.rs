@@ -216,25 +216,120 @@ impl ConnectionReaderWrapper {
                                 .unwrap();
                         }
                         // User issued a commend (i.e "/list")
-                        Command(command) => match command.as_str() {
-                            "list" => {
-                                self.channel_sender
-                                    .send(ChannelCommand::UsersQuery(self.addr))
-                                    .await
-                                    .unwrap();
+                        Command(command) => {
+                            let mut split = command.as_str().split(' ');
+                            if let Some(command) = split.next() {
+                                match command {
+                                    "list" => {
+                                        self.channel_sender
+                                            .send(ChannelCommand::UsersQuery(self.addr))
+                                            .await
+                                            .unwrap();
+                                    }
+                                    "kick" => {
+                                        let m = if let Some(target) = split.next() {
+                                            let perms = self
+                                                .get_perms(self.username.to_owned().unwrap())
+                                                .await;
+                                            if let Ok(perms) = perms {
+                                                if perms.operator {
+                                                    self.channel_sender
+                                                        .send(ChannelCommand::KickUser(
+                                                            target.to_owned(),
+                                                        ))
+                                                        .await
+                                                        .unwrap();
+                                                    format!("{} kicked.", target)
+                                                } else {
+                                                    "Not permitted.".to_owned()
+                                                }
+                                            } else {
+                                                "Error.".to_owned()
+                                            }
+                                        } else {
+                                            "No target provided".to_owned()
+                                        };
+                                        self.respond(m).await;
+                                    }
+                                    "ban" => {
+                                        self.ban_command(split.next(), true).await;
+                                    }
+                                    "unban" => {
+                                        self.ban_command(split.next(), false).await;
+                                    }
+                                    "whitelist" => {
+                                        self.whitelist_command(split.next(), true).await;
+                                    }
+                                    "unwhitelist" => {
+                                        self.whitelist_command(split.next(), false).await;
+                                    }
+                                    "set_whitelist" => {
+                                        if let Some(arg) = split.next() {
+                                            match arg {
+                                                "on" | "true" => {
+                                                    self.channel_sender
+                                                        .send(ChannelCommand::SetWhitelist(true))
+                                                        .await
+                                                        .unwrap();
+                                                    self.respond("Whitelist on.".to_string()).await;
+                                                }
+                                                "off" | "false" => {
+                                                    self.channel_sender
+                                                        .send(ChannelCommand::SetWhitelist(false))
+                                                        .await
+                                                        .unwrap();
+                                                    self.respond("Whitelist off.".to_string())
+                                                        .await;
+                                                }
+                                                _ => {
+                                                    self.respond(format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)).await;
+                                                }
+                                            };
+                                        } else {
+                                            self.respond("No argument provided".to_string()).await;
+                                        }
+                                    }
+                                    "set_allow_new_accounts" => {
+                                        if let Some(arg) = split.next() {
+                                            match arg {
+                                                "on" | "true" => {
+                                                    self.channel_sender
+                                                        .send(ChannelCommand::SetAllowNewAccounts(
+                                                            true,
+                                                        ))
+                                                        .await
+                                                        .unwrap();
+                                                    self.respond(
+                                                        "Allow new accounts on.".to_string(),
+                                                    )
+                                                    .await;
+                                                }
+                                                "off" | "false" => {
+                                                    self.channel_sender
+                                                        .send(ChannelCommand::SetAllowNewAccounts(
+                                                            false,
+                                                        ))
+                                                        .await
+                                                        .unwrap();
+                                                    self.respond(
+                                                        "Allow new accounts off.".to_string(),
+                                                    )
+                                                    .await;
+                                                }
+                                                _ => {
+                                                    self.respond(format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)).await;
+                                                }
+                                            };
+                                        } else {
+                                            self.respond("No argument provided".to_string()).await;
+                                        }
+                                    }
+                                    c => {
+                                        self.respond(format!("Unknown command: {}", c)).await;
+                                    }
+                                }
                             }
-                            c => {
-                                let p = ClientboundPacket::Message(accord::packets::Message {
-                                    text: format!("Unknown command: {}", c),
-                                    sender: "#SERVER#".to_string(),
-                                    time: current_time_as_sec(),
-                                });
-                                self.connection_sender
-                                    .send(ConnectionCommand::Write(p))
-                                    .await
-                                    .unwrap();
-                            }
-                        },
+                        }
                         FetchMessages(o, n) => {
                             let (otx, orx) = oneshot::channel();
                             self.channel_sender
@@ -298,6 +393,77 @@ impl ConnectionReaderWrapper {
                 }
             }
         }
+    }
+
+    async fn get_perms(
+        &mut self,
+        username: String,
+    ) -> Result<UserPermissions, oneshot::error::RecvError> {
+        let (otx, orx) = oneshot::channel();
+        self.channel_sender
+            .send(ChannelCommand::CheckPermissions(username, otx))
+            .await
+            .unwrap();
+        orx.await
+    }
+
+    async fn ban_command(&mut self, target: Option<&str>, switch: bool) {
+        let m = if let Some(target) = target {
+            let perms = self.get_perms(self.username.to_owned().unwrap()).await;
+            if let Ok(perms) = perms {
+                if perms.operator {
+                    self.channel_sender
+                        .send(ChannelCommand::BanUser(target.to_owned(), switch))
+                        .await
+                        .unwrap();
+                    let prefix = if switch { "" } else { "un" };
+                    format!("{} {}banned.", target, prefix)
+                } else {
+                    "Not permitted.".to_owned()
+                }
+            } else {
+                "Error.".to_owned()
+            }
+        } else {
+            "No target provided".to_owned()
+        };
+        self.respond(m).await;
+    }
+
+    async fn whitelist_command(&mut self, target: Option<&str>, switch: bool) {
+        let m = if let Some(target) = target {
+            let perms = self.get_perms(self.username.to_owned().unwrap()).await;
+            if let Ok(perms) = perms {
+                if perms.operator {
+                    self.channel_sender
+                        .send(ChannelCommand::WhitelistUser(target.to_owned(), switch))
+                        .await
+                        .unwrap();
+                    let prefix = if switch { "" } else { "un" };
+                    format!("{} {}whitelisted.", target, prefix)
+                } else {
+                    "Not permitted.".to_owned()
+                }
+            } else {
+                "Error.".to_owned()
+            }
+        } else {
+            "No target provided".to_owned()
+        };
+        self.respond(m).await;
+    }
+
+    /// Sends `message` to the user of this channel as a reply from the server.
+    async fn respond(&mut self, message: String) {
+        let p = ClientboundPacket::Message(accord::packets::Message {
+            text: message,
+            sender: "#SERVER#".to_string(),
+            time: current_time_as_sec(),
+        });
+        self.connection_sender
+            .send(ConnectionCommand::Write(p))
+            .await
+            .unwrap();
     }
 }
 

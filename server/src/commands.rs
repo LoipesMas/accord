@@ -5,6 +5,13 @@ use std::net::SocketAddr;
 use tokio::sync::{mpsc::Sender, oneshot::Sender as OSender};
 
 #[derive(Debug)]
+pub struct UserPermissions {
+    pub operator: bool,
+    pub whitelisted: bool,
+    pub banned: bool,
+}
+
+#[derive(Debug)]
 pub enum ConnectionCommand {
     Write(ClientboundPacket),
     SetSecret(Option<Vec<u8>>),
@@ -34,6 +41,12 @@ pub enum ChannelCommand {
     UserLeft(SocketAddr),
     UsersQuery(SocketAddr),
     FetchMessages(i64, i64, OSender<Vec<ClientboundPacket>>),
+    CheckPermissions(String, OSender<UserPermissions>),
+    KickUser(String),
+    BanUser(String, bool),
+    WhitelistUser(String, bool),
+    SetWhitelist(bool),
+    SetAllowNewAccounts(bool),
 }
 
 pub type LoginResult = Result<String, String>;
