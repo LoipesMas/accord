@@ -1,7 +1,5 @@
 use std::{
     collections::HashMap,
-    net::SocketAddr,
-    str::FromStr,
     sync::{Arc, Mutex},
 };
 
@@ -150,14 +148,7 @@ fn main() {
 }
 
 fn connect_click(data: &mut AppState) {
-    let addr = match try_parse_addr(&data.input_text1) {
-        Ok(addr) => addr,
-        Err(e) => {
-            log::warn!("{}", e);
-            data.info_label_text = Arc::new("Invalid address".to_string());
-            return;
-        }
-    };
+    let addr = try_parse_addr(&data.input_text1);
     if accord::utils::verify_username(&*data.input_text2) {
         data.info_label_text = Arc::new("Connecting...".to_string());
         data.connection_handler_tx
@@ -297,11 +288,11 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
         .padding(Insets::uniform_xy(0.0, 1.0))
 }
 
-fn try_parse_addr(s: &str) -> Result<SocketAddr, std::net::AddrParseError> {
+fn try_parse_addr(s: &str) -> String {
     if s.contains(':') {
-        SocketAddr::from_str(s)
+        s.to_owned()
     } else {
-        SocketAddr::from_str(&format!("{}:{}", s, accord::DEFAULT_PORT))
+        format!("{}:{}", s, accord::DEFAULT_PORT)
     }
 }
 

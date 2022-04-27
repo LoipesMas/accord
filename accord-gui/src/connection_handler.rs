@@ -10,7 +10,7 @@ use tokio::{
 
 use accord::{connection::*, packets::*, ENC_TOK_LEN, SECRET_LEN};
 
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use rand::{rngs::OsRng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -32,7 +32,7 @@ pub enum GuiCommand {
 
 #[derive(Debug)]
 pub enum ConnectionHandlerCommand {
-    Connect(SocketAddr, String, String),
+    Connect(String, String, String),
     Write(accord::packets::ServerboundPacket),
 }
 
@@ -62,7 +62,7 @@ impl ConnectionHandler {
     pub async fn connect(
         &self,
         gui_rx: &mut mpsc::Receiver<ConnectionHandlerCommand>,
-        addr: SocketAddr,
+        addr: String,
         username: String,
         password: String,
         event_sink: &ExtEventSink,
