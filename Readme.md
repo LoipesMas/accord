@@ -50,3 +50,5 @@ cargo b -p accord-server --release
 7. Done!  
   Now clients can connect.
 
+## Contributing
+Contributions are very welcome! Features, ideas, bug fixes, anything.
