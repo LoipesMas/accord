@@ -38,7 +38,10 @@ fn config_path_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn config_path_dir() -> PathBuf {
-    todo!("%APPDATA%/accord-gui ?")
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap();
+    let mut path = PathBuf::from(local_app_data);
+    path.push("accord-gui");
+    path
 }
 
 pub fn save_config(mut config: Config) -> std::io::Result<()> {
