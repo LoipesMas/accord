@@ -57,6 +57,7 @@ impl Theme {
 
 #[derive(Debug, Data, Lens, Clone, PartialEq, Eq)]
 pub struct Message {
+    pub sender_id: i64,
     pub sender: String,
     pub date: String,
     pub content: String,
@@ -66,6 +67,7 @@ pub struct Message {
 impl Message {
     pub fn just_content(content: String) -> Self {
         Self {
+            sender_id: 0,
             sender: String::new(),
             date: String::new(),
             content,

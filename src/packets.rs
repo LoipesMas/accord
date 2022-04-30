@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct Message {
+    pub sender_id: i64,
     pub sender: String,
     pub text: String,
     pub time: u64,
@@ -10,6 +11,7 @@ pub struct Message {
 
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ImageMessage {
+    pub sender_id: i64,
     pub sender: String,
     pub time: u64,
     pub image_bytes: Vec<u8>,
