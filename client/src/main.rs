@@ -34,7 +34,7 @@ use rsa::PublicKey;
 use crate::console::ConsoleMessage;
 
 #[cfg(target_os = "unix")]
-const OS_EOL: &[u8] = "\n";
+const OS_EOL: &[u8] = b"\n";
 #[cfg(target_os = "windows")]
 const OS_EOL: &[u8] = b"\r\n";
 
