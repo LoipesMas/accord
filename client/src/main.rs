@@ -1,7 +1,20 @@
-use chrono::TimeZone;
+use console::InputWindow;
+use console::MessageWindow;
+use console::UserListWindow;
+use console_engine::crossterm::event::KeyEvent;
+use console_engine::crossterm::event::MouseEvent;
+use console_engine::crossterm::event::MouseEventKind;
+use console_engine::pixel;
+use console_engine::Color;
+use console_engine::ConsoleEngine;
+use console_engine::KeyCode;
+use console_engine::KeyModifiers;
+use std::error::Error;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::error::TryRecvError;
 
 use accord::connection::*;
 
@@ -11,7 +24,7 @@ use accord::{ENC_TOK_LEN, SECRET_LEN};
 
 use std::net::SocketAddr;
 
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use rand::{rngs::OsRng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -19,10 +32,19 @@ use rand_chacha::ChaCha20Rng;
 use rsa::PaddingScheme;
 use rsa::PublicKey;
 
+use crate::console::ConsoleMessage;
+
+#[cfg(target_os = "unix")]
+const OS_EOL: &[u8] = "\n";
+#[cfg(target_os = "windows")]
+const OS_EOL: &[u8] = b"\r\n";
+
+mod console;
+
 // TODO: config file?
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     //==================================
     //      Parse args
     //==================================
@@ -142,7 +164,8 @@ async fn main() {
                     println!("Username too long. (Max 17 characters)");
                     continue;
                 }
-                let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
+                let s = String::from_utf8_lossy(buf.strip_suffix(OS_EOL).unwrap()).to_string();
+                println!("{:?}", s);
                 if s.chars().any(|c| !c.is_alphanumeric()) {
                     println!("Invalid characters in username.");
                 } else {
@@ -158,7 +181,7 @@ async fn main() {
         match stdio.read_buf(&mut buf).await {
             Ok(0 | 1) => println!("Password can't be empty!"),
             Ok(_) => {
-                let s = String::from_utf8_lossy(buf.strip_suffix(b"\n").unwrap()).to_string();
+                let s = String::from_utf8_lossy(buf.strip_suffix(OS_EOL).unwrap()).to_string();
                 if s.chars().any(|c| !c.is_alphanumeric()) {
                     println!("Invalid characters in password.");
                 } else {
@@ -228,108 +251,220 @@ async fn main() {
     // To send close command when tcpstream is closed
     let (tx, rx) = oneshot::channel::<()>();
 
-    tokio::join!(
-        reading_loop(reader, tx, secret.clone(), nonce_generator_read),
-        writing_loop(writer, rx, secret.clone(), nonce_generator_write)
+    let (console_tx, console_rx) = mpsc::unbounded_channel::<ConsoleMessage>();
+
+    tokio::try_join!(
+        reading_loop(reader, console_tx, rx, secret.clone(), nonce_generator_read),
+        //writing_loop(writer, rx, secret.clone(), nonce_generator_write),
+        console_loop(
+            console_rx,
+            writer,
+            tx,
+            secret.clone(),
+            nonce_generator_write
+        )
+    )?;
+
+    Ok(())
+}
+
+async fn console_loop(
+    mut msg_channel: mpsc::UnboundedReceiver<ConsoleMessage>,
+    mut writer: ConnectionWriter<ServerboundPacket>,
+    close_sender: oneshot::Sender<()>,
+    secret: Option<Vec<u8>>,
+    mut nonce_generator: Option<ChaCha20Rng>,
+) -> Result<(), Box<dyn Error>> {
+    let mut input_buffer = String::new();
+    let mut console = ConsoleEngine::init_fill_require(40, 10, 10).unwrap();
+    console.set_title("Accord TUI");
+    let mut col2 = (console.get_width() / 8) - 1;
+    let mut w_userlist = UserListWindow::new(
+        std::cmp::max(console.get_width() / 8, 10),
+        console.get_height(),
     );
+    let mut w_messages = MessageWindow::new(console.get_width() - col2, console.get_height() - 2);
+    let mut w_input = InputWindow::new(console.get_width() - col2);
+
+    loop {
+        loop {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            match msg_channel.try_recv() {
+                Ok(ConsoleMessage::Close) => {
+                    break;
+                }
+                Ok(ConsoleMessage::AddMessage(message)) => {
+                    w_messages.add_message(console::Message::Message(message))
+                }
+                Ok(ConsoleMessage::AddImageMessage(message)) => {
+                    w_messages.add_message(console::Message::Image(message))
+                }
+                Ok(ConsoleMessage::AddSystemMessage(message)) => {
+                    w_messages.add_message(console::Message::System(message))
+                }
+                Ok(ConsoleMessage::AddErrorMessage(message)) => {
+                    w_messages.add_message(console::Message::Error(message))
+                }
+                Ok(ConsoleMessage::RefreshUserList(usernames)) => w_userlist.set_list(usernames),
+                Ok(ConsoleMessage::AddUser(username)) => w_userlist.add_user(username),
+                Ok(ConsoleMessage::RemoveUser(username)) => w_userlist.rm_user(username),
+                Err(TryRecvError::Disconnected) => {
+                    w_messages.add_message(console::Message::Error("Disconnected".to_owned()));
+                    break;
+                }
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+
+        match console.poll() {
+            console_engine::events::Event::Key(KeyEvent { code, modifiers }) => {
+                match code {
+                    KeyCode::Enter => {
+                        // send message
+                        let p = if let Some(command) = input_buffer.strip_prefix('/') {
+                            ServerboundPacket::Command(command.to_string())
+                        } else {
+                            ServerboundPacket::Message(input_buffer.to_string())
+                        };
+                        writer
+                            .write_packet(p, &secret, nonce_generator.as_mut())
+                            .await?;
+                        input_buffer = String::new();
+                    }
+                    KeyCode::Backspace => {
+                        let mut chars = input_buffer.chars();
+                        chars.next_back();
+                        input_buffer = chars.as_str().to_owned();
+                    }
+                    KeyCode::Up => w_messages.scroll(-1),
+                    KeyCode::Down => w_messages.scroll(1),
+                    KeyCode::Char(c) => {
+                        if modifiers.is_empty() {
+                            input_buffer.push(c);
+                        }
+                        if modifiers == KeyModifiers::CONTROL {
+                            match c {
+                                'c' => {
+                                    close_sender.send(()).unwrap();
+                                    break;
+                                }
+                                'p' => {}
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            console_engine::events::Event::Frame => {}
+            console_engine::events::Event::Mouse(MouseEvent {
+                kind,
+                column: _,
+                row: _,
+                modifiers: _,
+            }) => {
+                if kind == MouseEventKind::ScrollUp {
+                    w_messages.scroll(-1);
+                } else if kind == MouseEventKind::ScrollDown {
+                    w_messages.scroll(1)
+                }
+            }
+            console_engine::events::Event::Resize(_, _) => {
+                console.check_resize();
+                col2 = (console.get_width() / 8) - 1;
+                w_userlist.resize(
+                    std::cmp::max(console.get_width() / 8, 10),
+                    console.get_height(),
+                );
+                w_messages.resize(console.get_width() - col2, console.get_height() - 2);
+                w_input.resize(console.get_width() - col2);
+                // panic!("This program doesn't support terminal resizing yet!");
+            }
+        }
+        w_input.set_content(&input_buffer);
+
+        console.print_screen(0, 0, w_userlist.draw());
+        console.line(
+            (col2 - 1) as i32,
+            0,
+            (col2 - 1) as i32,
+            (console.get_height() - 1) as i32,
+            pixel::pxl_fbg(' ', Color::Black, Color::Grey),
+        );
+        console.print_screen(col2 as i32, 0, w_messages.draw());
+        console.line(
+            col2 as i32,
+            (console.get_height() - 2) as i32,
+            console.get_width() as i32,
+            (console.get_height() - 2) as i32,
+            pixel::pxl_fbg(' ', Color::Black, Color::Grey),
+        );
+        console.print_screen(
+            col2 as i32,
+            (console.get_height() - 1) as i32,
+            w_input.draw(),
+        );
+        console.draw();
+    }
+    Ok(())
 }
 
 async fn reading_loop(
     mut reader: ConnectionReader<ClientboundPacket>,
-    close_sender: oneshot::Sender<()>,
-    secret: Option<Vec<u8>>,
-    mut nonce_generator: Option<ChaCha20Rng>,
-) {
-    'l: loop {
-        match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-            Ok(Some(ClientboundPacket::Message(Message {
-                text,
-                sender_id: _sender_id,
-                sender,
-                time,
-            }))) => {
-                let time = chrono::Local.timestamp(time as i64, 0);
-                println!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text);
-            }
-            Ok(Some(ClientboundPacket::UserJoined(username))) => {
-                println!("{} joined the channel", username);
-            }
-            Ok(Some(ClientboundPacket::UserLeft(username))) => {
-                println!("{} left the channel", username);
-            }
-            Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
-                println!("-------------");
-                println!("Users online:");
-                for username in &usernames {
-                    println!("  {}", username);
-                }
-                println!("-------------");
-            }
-            Ok(Some(ClientboundPacket::ImageMessage(im))) => {
-                let time = chrono::Local.timestamp(im.time as i64, 0);
-                println!(
-                    "{} sent an image. ({})",
-                    im.sender,
-                    time.format("%H:%M %d-%m")
-                )
-            }
-            Ok(Some(p)) => {
-                println!("!!Unhandled packet: {:?}", p);
-            }
-            Err(e) => {
-                println!("{}", e);
-                close_sender.send(()).unwrap();
-                break 'l;
-            }
-            _ => {
-                println!("Connection closed(?)\nPress Enter to exit.");
-                close_sender.send(()).unwrap();
-                break 'l;
-            }
-        }
-    }
-}
-
-async fn writing_loop(
-    mut writer: ConnectionWriter<ServerboundPacket>,
+    console_channel: mpsc::UnboundedSender<ConsoleMessage>,
     mut close_receiver: oneshot::Receiver<()>,
     secret: Option<Vec<u8>>,
     mut nonce_generator: Option<ChaCha20Rng>,
-) {
-    let mut stdio = tokio::io::stdin();
-    let mut buf = bytes::BytesMut::new();
-    loop {
-        tokio::select!(
-            r = stdio.read_buf(&mut buf) => {
-                if r.is_ok() {
-                    let s = String::from_utf8_lossy(&buf).to_string();
-
-                    if let Some(s) = s.strip_suffix('\n') {
-                        buf.clear();
-                        // Clear input line
-                        print!("\r\u{1b}[A");
-                        if s.chars().any(|c| c.is_control()) {
-                            println!("Invalid message text!");
-                            continue;
-                        }
-
-                        if s.is_empty() {
-                            print!("\u{1b}[A\u{1b}[A");
-                            continue;
-                        }
-
-                        let p = if let Some(command) = s.strip_prefix('/') {
-                            ServerboundPacket::Command(command.to_string())
-                        } else {
-                            ServerboundPacket::Message(s.to_string())
-                        };
-                        writer.write_packet(p, &secret, nonce_generator.as_mut()).await.unwrap();
-                    }
-                }
+) -> Result<(), Box<dyn Error>> {
+    'l: loop {
+        match reader.read_packet(&secret, nonce_generator.as_mut()).await {
+            Ok(Some(ClientboundPacket::Message(message))) => {
+                console_channel.send(ConsoleMessage::AddMessage(message))?;
             }
-            _ = &mut close_receiver => {
-                break;
+            Ok(Some(ClientboundPacket::UserJoined(username))) => {
+                console_channel.send(ConsoleMessage::AddSystemMessage(format!(
+                    "{} joined the channel",
+                    username
+                )))?;
+                console_channel.send(ConsoleMessage::AddUser(username))?;
             }
-        );
+            Ok(Some(ClientboundPacket::UserLeft(username))) => {
+                console_channel.send(ConsoleMessage::AddSystemMessage(format!(
+                    "{} left the channel",
+                    username
+                )))?;
+                console_channel.send(ConsoleMessage::RemoveUser(username))?;
+            }
+            Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
+                console_channel.send(ConsoleMessage::RefreshUserList(usernames))?;
+            }
+            Ok(Some(ClientboundPacket::ImageMessage(im))) => {
+                console_channel.send(ConsoleMessage::AddImageMessage(im))?;
+            }
+            Ok(Some(p)) => {
+                console_channel.send(ConsoleMessage::AddErrorMessage(format!(
+                    "!!Unhandled packet: {:?}",
+                    p
+                )))?;
+            }
+            Err(e) => {
+                console_channel.send(ConsoleMessage::AddErrorMessage(e))?;
+                console_channel.send(ConsoleMessage::Close)?;
+                break 'l;
+            }
+            _ => {
+                console_channel.send(ConsoleMessage::AddErrorMessage(
+                    "Connection closed(?)\nPress Enter to exit.".to_owned(),
+                ))?;
+                console_channel.send(ConsoleMessage::Close)?;
+                break 'l;
+            }
+        }
+        if let Ok(()) = close_receiver.try_recv() {
+            break 'l;
+        }
     }
+    Ok(())
 }
