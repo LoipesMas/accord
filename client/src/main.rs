@@ -14,7 +14,6 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::error::TryRecvError;
 
 use accord::connection::*;
 
@@ -287,37 +286,32 @@ async fn console_loop(
     let mut w_input = InputWindow::new(console.get_width() - col2);
 
     loop {
-        loop {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            match msg_channel.try_recv() {
-                Ok(ConsoleMessage::Close) => {
+        // force awaiting because this loop is mostly synchronous
+        tokio::time::sleep(Duration::from_micros(1)).await;
+        // process all received messages
+        while let Ok(msg) = msg_channel.try_recv() {
+            match msg {
+                ConsoleMessage::Close => {
                     break;
                 }
-                Ok(ConsoleMessage::AddMessage(message)) => {
+                ConsoleMessage::AddMessage(message) => {
                     w_messages.add_message(console::Message::Message(message))
                 }
-                Ok(ConsoleMessage::AddImageMessage(message)) => {
+                ConsoleMessage::AddImageMessage(message) => {
                     w_messages.add_message(console::Message::Image(message))
                 }
-                Ok(ConsoleMessage::AddSystemMessage(message)) => {
+                ConsoleMessage::AddSystemMessage(message) => {
                     w_messages.add_message(console::Message::System(message))
                 }
-                Ok(ConsoleMessage::AddErrorMessage(message)) => {
+                ConsoleMessage::AddErrorMessage(message) => {
                     w_messages.add_message(console::Message::Error(message))
                 }
-                Ok(ConsoleMessage::RefreshUserList(usernames)) => w_userlist.set_list(usernames),
-                Ok(ConsoleMessage::AddUser(username)) => w_userlist.add_user(username),
-                Ok(ConsoleMessage::RemoveUser(username)) => w_userlist.rm_user(username),
-                Err(TryRecvError::Disconnected) => {
-                    w_messages.add_message(console::Message::Error("Disconnected".to_owned()));
-                    break;
-                }
-                Err(_) => {
-                    break;
-                }
+                ConsoleMessage::RefreshUserList(usernames) => w_userlist.set_list(usernames),
+                ConsoleMessage::AddUser(username) => w_userlist.add_user(username),
+                ConsoleMessage::RemoveUser(username) => w_userlist.rm_user(username),
             }
         }
-
+        // Process inputs
         match console.poll() {
             console_engine::events::Event::Key(KeyEvent { code, modifiers }) => {
                 match code {
@@ -383,6 +377,7 @@ async fn console_loop(
                 // panic!("This program doesn't support terminal resizing yet!");
             }
         }
+        // update screen
         w_input.set_content(&input_buffer);
 
         console.print_screen(0, 0, w_userlist.draw());
