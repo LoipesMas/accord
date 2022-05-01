@@ -242,7 +242,7 @@ async fn reading_loop(
 ) {
     'l: loop {
         match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-            Ok(Some(ClientboundPacket::Message(Message { text, sender, time }))) => {
+            Ok(Some(ClientboundPacket::Message(Message { text, sender_id: _sender_id, sender, time }))) => {
                 let time = chrono::Local.timestamp(time as i64, 0);
                 println!("{} ({}): {}", sender, time.format("%H:%M %d-%m"), text);
             }

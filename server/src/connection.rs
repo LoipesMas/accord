@@ -33,6 +33,7 @@ pub struct ConnectionReaderWrapper {
     addr: std::net::SocketAddr,
     connection_sender: Sender<ConnectionCommand>,
     channel_sender: Sender<ChannelCommand>,
+    user_id: Option<i64>,
     username: Option<String>,
     secret: Option<Vec<u8>>,
     nonce_generator: Option<ChaCha20Rng>,
@@ -50,6 +51,7 @@ impl ConnectionReaderWrapper {
             addr,
             connection_sender,
             channel_sender,
+            user_id: None,
             username: None,
             secret: None,
             nonce_generator: None,
@@ -69,16 +71,19 @@ impl ConnectionReaderWrapper {
             .await
             .unwrap();
         match orx.await.unwrap() {
-            Ok(un) => {
+            Ok(response) => {
+                let mut response_split = response.split('|');
+                self.user_id = Some(response_split.next().unwrap().parse().unwrap());
+                self.username = Some(response_split.next().unwrap().parse().unwrap());
+
                 self.connection_sender
                     .send(ConnectionCommand::Write(ClientboundPacket::LoginAck))
                     .await
                     .unwrap();
                 self.channel_sender
-                    .send(ChannelCommand::UserJoined(un.clone()))
+                    .send(ChannelCommand::UserJoined(self.username.clone().unwrap()))
                     .await
                     .unwrap();
-                self.username = Some(un);
             }
             Err(m) => {
                 self.connection_sender
@@ -190,8 +195,9 @@ impl ConnectionReaderWrapper {
                         Message(m) => {
                             if verify_message(&m) {
                                 let p = ClientboundPacket::Message(accord::packets::Message {
-                                    text: m,
+                                    sender_id: self.user_id.clone().unwrap(),
                                     sender: self.username.clone().unwrap(),
+                                    text: m,
                                     time: current_time_as_sec(),
                                 });
                                 self.channel_sender
@@ -207,6 +213,7 @@ impl ConnectionReaderWrapper {
                             let p =
                                 ClientboundPacket::ImageMessage(accord::packets::ImageMessage {
                                     image_bytes: im,
+                                    sender_id: self.user_id.clone().unwrap(),
                                     sender: self.username.clone().unwrap(),
                                     time: current_time_as_sec(),
                                 });
@@ -456,8 +463,9 @@ impl ConnectionReaderWrapper {
     /// Sends `message` to the user of this channel as a reply from the server.
     async fn respond(&mut self, message: String) {
         let p = ClientboundPacket::Message(accord::packets::Message {
-            text: message,
+            sender_id: 0,
             sender: "#SERVER#".to_string(),
+            text: message,
             time: current_time_as_sec(),
         });
         self.connection_sender

@@ -254,11 +254,12 @@ impl ConnectionHandler {
     ) {
         'l: loop {
             match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-                Ok(Some(ClientboundPacket::Message(Message { text, sender, time }))) => {
+                Ok(Some(ClientboundPacket::Message(Message { text, sender_id, sender, time }))) => {
                     let time = chrono::Local.timestamp(time as i64, 0);
                     submit_command(
                         event_sink,
                         GuiCommand::AddMessage(GMessage {
+                            sender_id,
                             sender,
                             date: time.format("(%H:%M %d-%m)").to_string(),
                             content: text,
@@ -316,6 +317,7 @@ impl ConnectionHandler {
                     );
                     let m = GMessage {
                         content: hash,
+                        sender_id: im.sender_id,
                         sender: im.sender,
                         date: time.format("(%H:%M %d-%m)").to_string(),
                         is_image: true,

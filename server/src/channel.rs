@@ -37,18 +37,22 @@ impl AccordChannel {
         let mut rng = OsRng;
         let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
         let pub_key = RsaPublicKey::from(&priv_key);
+        
+        // postgres://USER:PASSWORD@HOST:PORT/DATABASE_NAME
+        let database_config = format!(
+            "host='{}' port='{}' user='{}' password='{}' dbname='{}'",
+            config.db_host, config.db_port, config.db_user, config.db_pass, config.db_dbname,
+        );
+
         let (db_client, db_connection) = match tokio_postgres::connect(
-            &format!(
-                "host='{}' user='{}' password='{}' dbname='{}'",
-                config.db_host, config.db_user, config.db_pass, config.db_dbname,
-            ),
+            &database_config,
             NoTls,
         )
         .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Postgres connection error: {}\n(Make sure that the postgres server is running!)", e);
+                log::error!("Postgres connection ({}) error: {}\n(Make sure that the postgres server is running!)", database_config, e);
                 std::process::exit(-1)
             }
         };
@@ -59,30 +63,54 @@ impl AccordChannel {
             };
         });
 
-        // Try to create account table
-        // (we just error if it already exists :) )
+        
+        // Prepare Database, panic if it fails and gives us the reason. Without this, the server will be useless anyway, so it is ok to panic here.
+        // Friendly reminder @LoipesMas never silence errors, otherwise debugging will be a pain.
+        log::info!("Preparing database...");
+
+        // Create accord schema if not exists, handle errors
         let _ = db_client
             .execute(
-                "CREATE TABLE accounts (username varchar(255) NOT NULL PRIMARY KEY, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
+                "CREATE SCHEMA IF NOT EXISTS accord",
                 &[],
             )
-            .await;
+            .await
+            .expect("failed to create schema 'accord'");
 
-        // Try to create table for images
+        // Create account table if not exists
         let _ = db_client
             .execute(
-                "CREATE TABLE images ( image_hash INT PRIMARY KEY, data BYTEA NOT NULL);",
+                "CREATE TABLE IF NOT EXISTS accord.accounts (user_id serial8 NOT null PRIMARY KEY, username varchar(255) NOT NULL UNIQUE, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
                 &[],
             )
-            .await;
+            .await
+            .expect("failed to create table 'accounts'");
 
-        // Try to create messages table
-        // (we just error if it already exists :) )
+        // Create images table if not exists
         let _ = db_client
             .execute(
-        "CREATE TABLE messages ( sender varchar(255) NOT NULL, content varchar(1023), send_time bigint NOT NULL, image_hash INT, CONSTRAINT fk_image_hash FOREIGN KEY(image_hash) REFERENCES images(image_hash), CONSTRAINT fk_username FOREIGN KEY(sender) REFERENCES accounts(username));",
+                "CREATE TABLE IF NOT EXISTS accord.images ( image_hash INT PRIMARY KEY, data BYTEA NOT NULL);",
+                &[],
+            )
+            .await
+            .expect("failed to create table 'images'");
+
+        // Create messages table if not exists
+        let _ = db_client
+            .execute(
+        "CREATE TABLE IF NOT EXISTS accord.messages ( 
+                        sender_id int8 NOT NULL, sender varchar(255) NOT NULL DEFAULT '*deleted_user*', content varchar(1023), send_time bigint NOT NULL, image_hash INT DEFAULT NULL, 
+                        CONSTRAINT fk_image_hash FOREIGN KEY(image_hash) REFERENCES accord.images(image_hash) ON DELETE SET DEFAULT ON UPDATE CASCADE, 
+                        CONSTRAINT fk_username FOREIGN KEY(sender) REFERENCES accord.accounts(username) ON DELETE SET DEFAULT ON UPDATE CASCADE
+                    );",
         &[],
-        ).await;
+        ).await
+        .expect("failed to create table 'messages'");
+
+
+        log::info!("DONE: Preparing database");
+
+
 
         let s = Self {
             receiver,
@@ -210,14 +238,16 @@ impl AccordChannel {
                         if let Some(hash) = r.get::<_, Option<i32>>("image_hash") {
                             let image_bytes = self.fetch_image(hash).await;
                             ClientboundPacket::ImageMessage(accord::packets::ImageMessage {
-                                image_bytes,
+                                sender_id: r.get("sender_id"),
                                 sender: r.get("sender"),
+                                image_bytes,
                                 time: r.get::<_, i64>("send_time") as u64,
                             })
                         } else {
                             ClientboundPacket::Message(accord::packets::Message {
-                                text: r.get("content"),
+                                sender_id: r.get("sender_id"),
                                 sender: r.get("sender"),
+                                text: r.get("content"),
                                 time: r.get::<_, i64>("send_time") as u64,
                             })
                         }
@@ -287,6 +317,7 @@ impl AccordChannel {
             tx,
         } = p
         {
+            // I don't like how the allow and deny lists work.. we have a database, but don't use it here..
             let res = if !verify_username(&username) {
                 Err("Invalid username!".to_string())
             } else if self.config.banned_users.contains(&username) {
@@ -305,7 +336,9 @@ impl AccordChannel {
                         Err("Already logged in.".to_string())
                     } else {
                         log::info!("Logged in: {}", username);
-                        Ok(username.clone())
+                        let user_id: i64 = row.get("user_id");
+                        let username: String = row.get("username");
+                        Ok(format!("{}|{}", user_id, username))
                     }
                 } else {
                     Err("Incorrect password".to_string())
@@ -316,9 +349,16 @@ impl AccordChannel {
                     let mut salt = [0; 64];
                     self.salt_generator.fill_bytes(&mut salt);
                     let pass_hash = hash_password(password, salt);
-                    self.insert_user(&username, &pass_hash, &salt).await;
-                    log::info!("New account: {}", username);
-                    Ok(username.clone())
+                    
+                    if let Some(row) = self.insert_user(&username, &pass_hash, &salt).await {
+                        log::info!("New account: {}", username);
+                        let user_id: i64 = row.get("user_id");
+                        let username: String = row.get("username");
+                        
+                        Ok(format!("{}|{}", user_id, username))
+                    } else {
+                        Err("Failed to create account.".to_string())
+                    }
                 } else {
                     Err("Account creation disabled.".to_string())
                 }
@@ -335,18 +375,18 @@ impl AccordChannel {
         }
     }
 
-    async fn insert_user(&self, username: &str, pass_hash: &[u8], salt: &[u8]) {
+    async fn insert_user(&self, username: &str, pass_hash: &[u8], salt: &[u8]) -> Option<tokio_postgres::Row> {
         self.db_client
-            .execute(
-                "INSERT INTO accounts VALUES ($1, $2, $3)",
+            .query_opt(
+                "INSERT INTO accord.accounts(username, password, salt) VALUES ($1, $2, $3) RETURNING *",
                 &[&username, &base64::encode(pass_hash), &base64::encode(salt)],
             )
             .await
-            .unwrap();
+            .unwrap()
     }
     async fn get_user(&self, username: &str) -> Option<tokio_postgres::Row> {
         self.db_client
-            .query_opt("SELECT * FROM accounts WHERE username=$1", &[&username])
+            .query_opt("SELECT user_id, username, password, salt FROM accord.accounts WHERE username=$1", &[&username])
             .await
             .unwrap()
     }
@@ -354,8 +394,8 @@ impl AccordChannel {
     async fn insert_message(&self, message: &accord::packets::Message) {
         self.db_client
             .execute(
-                "INSERT INTO messages VALUES ($1, $2, $3)",
-                &[&message.sender, &message.text, &(message.time as i64)],
+                "INSERT INTO accord.messages(sender_id, sender, content, send_time) VALUES ($1, $2, $3, $4)",
+                &[&message.sender_id, &message.sender, &message.text, &(message.time as i64)],
             )
             .await
             .unwrap();
@@ -373,7 +413,7 @@ impl AccordChannel {
         // Insert image into db
         self.db_client
             .execute(
-                "INSERT INTO images VALUES ($1, $2)",
+                "INSERT INTO accord.images VALUES ($1, $2)",
                 &[&hash, &message.image_bytes],
             )
             .await
@@ -382,8 +422,8 @@ impl AccordChannel {
         // Inser message with hash as a foreign key
         self.db_client
             .execute(
-                "INSERT INTO messages VALUES ($1, '', $2, $3)",
-                &[&message.sender, &(message.time as i64), &hash],
+                "INSERT INTO accord.messages (sender_id, sender, content, send_time, image_hash) VALUES ($1, '', $2, $3, $4)",
+                &[&message.sender_id, &message.sender, &(message.time as i64), &hash],
             )
             .await
             .unwrap();
@@ -392,7 +432,7 @@ impl AccordChannel {
     async fn fetch_messages(&self, offset: i64, count: i64) -> Vec<tokio_postgres::Row> {
         self.db_client
             .query(
-                "SELECT * FROM messages ORDER BY send_time DESC OFFSET $1 ROWS FETCH FIRST $2 ROW ONLY;",
+                "SELECT sender_id, sender, content, send_time, image_hash FROM accord.messages ORDER BY send_time DESC OFFSET $1 ROWS FETCH FIRST $2 ROW ONLY;",
                 &[&offset, &count],
             )
             .await
@@ -403,7 +443,7 @@ impl AccordChannel {
     async fn fetch_image(&self, hash: i32) -> Vec<u8> {
         let r = self
             .db_client
-            .query("SELECT data FROM images WHERE image_hash=$1", &[&hash])
+            .query("SELECT data FROM accord.images WHERE image_hash=$1", &[&hash])
             .await
             .unwrap();
         r.get(0).unwrap().get::<_, Vec<u8>>("data")
