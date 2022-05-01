@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "accord"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "chacha20poly1305",
@@ -17,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "accord-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accord",
  "bytes",
@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "accord-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accord",
  "bytes",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "accord-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accord",
  "base64",
