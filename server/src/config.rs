@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub db_host: String,
+    pub db_port: String,
     pub db_user: String,
     pub db_pass: String,
     pub db_dbname: String,
@@ -21,6 +22,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             db_host: Default::default(),
+            db_port: Default::default(),
             db_user: Default::default(),
             db_pass: Default::default(),
             db_dbname: Default::default(),

@@ -39,12 +39,13 @@ impl AccordChannel {
         let pub_key = RsaPublicKey::from(&priv_key);
         
         // postgres://USER:PASSWORD@HOST:PORT/DATABASE_NAME
-        let database_url = format!(
-            "postgres://{}:{}@{}/{}",
-            config.db_user, config.db_pass, config.db_host, config.db_dbname,
+        let database_config = format!(
+            "host='{}' port='{}' user='{}' password='{}' dbname='{}'",
+            config.db_host, config.db_port, config.db_user, config.db_pass, config.db_dbname,
         );
+
         let (db_client, db_connection) = match tokio_postgres::connect(
-            &database_url,
+            &database_config,
             NoTls,
         )
         .await
