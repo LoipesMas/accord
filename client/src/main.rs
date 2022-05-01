@@ -353,11 +353,8 @@ async fn console_loop(
     secret: Option<Vec<u8>>,
     mut nonce_generator: Option<ChaCha20Rng>,
 ) -> Result<(), Box<dyn Error>> {
-    let mut col2 = (console.get_width() / 8) - 1;
-    let mut w_userlist = UserListWindow::new(
-        std::cmp::max(console.get_width() / 8, 10),
-        console.get_height(),
-    );
+    let mut col2 = std::cmp::max(console.get_width() / 8, 10) - 1;
+    let mut w_userlist = UserListWindow::new(col2 + 1, console.get_height());
     let mut w_messages = MessageWindow::new(console.get_width() - col2, console.get_height() - 2);
     let mut w_input = InputWindow::new(console.get_width() - col2);
 
@@ -459,11 +456,8 @@ async fn console_loop(
             }
             console_engine::events::Event::Resize(_, _) => {
                 console.check_resize();
-                col2 = (console.get_width() / 8) - 1;
-                w_userlist.resize(
-                    std::cmp::max(console.get_width() / 8, 10),
-                    console.get_height(),
-                );
+                col2 = std::cmp::max(console.get_width() / 8, 10) - 1;
+                w_userlist.resize(col2 + 1, console.get_height());
                 w_messages.resize(console.get_width() - col2, console.get_height() - 2);
                 w_input.resize(console.get_width() - col2);
                 // panic!("This program doesn't support terminal resizing yet!");
