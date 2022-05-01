@@ -72,18 +72,18 @@ impl ConnectionReaderWrapper {
             .unwrap();
         match orx.await.unwrap() {
             Ok(response) => {
+                let mut response_split = response.split('|');
+                self.user_id = Some(response_split.next().unwrap().parse().unwrap());
+                self.username = Some(response_split.next().unwrap().parse().unwrap());
+
                 self.connection_sender
                     .send(ConnectionCommand::Write(ClientboundPacket::LoginAck))
                     .await
                     .unwrap();
                 self.channel_sender
-                    .send(ChannelCommand::UserJoined(response.clone()))
+                    .send(ChannelCommand::UserJoined(self.username.clone().unwrap()))
                     .await
                     .unwrap();
-
-                let mut response_split = response.split('|');
-                self.user_id = Some(response_split.next().unwrap().parse().unwrap());
-                self.username = Some(response_split.next().unwrap().parse().unwrap());
             }
             Err(m) => {
                 self.connection_sender

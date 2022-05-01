@@ -52,7 +52,7 @@ impl AccordChannel {
         {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Postgres connection ({}) error: {}\n(Make sure that the postgres server is running!)", database_url, e);
+                log::error!("Postgres connection ({}) error: {}\n(Make sure that the postgres server is running!)", database_config, e);
                 std::process::exit(-1)
             }
         };
