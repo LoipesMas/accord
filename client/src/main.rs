@@ -338,6 +338,14 @@ async fn console_loop(
                         if modifiers.is_empty() {
                             input_buffer.push(c);
                         }
+                        if modifiers == KeyModifiers::SHIFT {
+                            // I don't understand why it works this way but not the other
+                            if c.is_ascii_uppercase() {
+                                input_buffer.push(c.to_ascii_uppercase());
+                            } else {
+                                input_buffer.push(c.to_ascii_lowercase());
+                            }
+                        }
                         if modifiers == KeyModifiers::CONTROL {
                             match c {
                                 'c' => {
