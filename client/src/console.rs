@@ -16,7 +16,7 @@ pub enum ConsoleMessage {
 }
 
 pub enum Message {
-    Message(accord::packets::Message),
+    Text(accord::packets::Message),
     Image(accord::packets::ImageMessage),
     System(String),
     Error(String),
@@ -25,7 +25,7 @@ pub enum Message {
 impl Message {
     pub fn print(&self, screen: &mut Screen, x: i32, y: i32) {
         match self {
-            Message::Message(message) => {
+            Message::Text(message) => {
                 let time = chrono::Local.timestamp(message.time as i64, 0);
                 screen.print(
                     x,
@@ -52,11 +52,9 @@ impl Message {
                 )
             }
             Message::System(message) => {
-                screen.print_fbg(x, y, &message.to_string(), Color::DarkGrey, Color::Reset)
+                screen.print_fbg(x, y, message, Color::DarkGrey, Color::Reset)
             }
-            Message::Error(message) => {
-                screen.print_fbg(x, y, &message.to_string(), Color::Red, Color::Reset)
-            }
+            Message::Error(message) => screen.print_fbg(x, y, message, Color::Red, Color::Reset),
         }
     }
 }
@@ -152,19 +150,15 @@ impl MessageWindow {
 
     pub fn scroll(&mut self, amount: i32) {
         self.dirty = true;
-        self.scroll_index = std::cmp::min(
-            self.message_list.len() as i32 - 1,
-            std::cmp::max(0, self.scroll_index as i32 + amount),
-        ) as usize
+        self.scroll_index = (self.scroll_index as i32 + amount)
+            .clamp(0, self.message_list.len() as i32 - 1) as usize;
     }
 
     pub fn draw(&mut self) -> &Screen {
         if self.dirty {
             self.screen.clear();
-            for (index, message) in self.message_list.iter().enumerate() {
-                if index >= self.scroll_index {
-                    message.print(&mut self.screen, 0, (index - self.scroll_index) as i32)
-                }
+            for (index, message) in self.message_list.iter().skip(self.scroll_index).enumerate() {
+                message.print(&mut self.screen, 0, index as i32)
             }
             self.dirty = false;
         }

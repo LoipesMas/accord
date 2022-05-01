@@ -33,9 +33,9 @@ use rsa::PublicKey;
 
 use crate::console::ConsoleMessage;
 
-#[cfg(target_os = "unix")]
+#[cfg(unix)]
 const OS_EOL: &[u8] = b"\n";
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 const OS_EOL: &[u8] = b"\r\n";
 
 mod console;
@@ -295,7 +295,7 @@ async fn console_loop(
                     break;
                 }
                 ConsoleMessage::AddMessage(message) => {
-                    w_messages.add_message(console::Message::Message(message))
+                    w_messages.add_message(console::Message::Text(message))
                 }
                 ConsoleMessage::AddImageMessage(message) => {
                     w_messages.add_message(console::Message::Image(message))
