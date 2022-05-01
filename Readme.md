@@ -18,6 +18,12 @@ Packet design and handshake inspired partially by Minecraft.
 - Sending images (via clipboard)
 - Server management (banning, whitelists, etc)
 
+
+## GUI requirements
+Because accord's gui client uses `druid`, it requires gtk on Linux and BSD.  
+See [druid's Readme notes](https://github.com/linebender/druid#platform-notes) for more information.
+
+
 ## Short-term goals
 - Improve GUI experience (sidebar with active users, loading up past messages and more)
 - Verify that the encryption is secure
