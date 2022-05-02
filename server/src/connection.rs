@@ -224,6 +224,7 @@ impl ConnectionReaderWrapper {
                         }
                         // User issued a commend (i.e "/list")
                         Command(command) => {
+                            //TODO: abstract this code more
                             let mut split = command.as_str().split(' ');
                             if let Some(command) = split.next() {
                                 match command {
@@ -271,33 +272,33 @@ impl ConnectionReaderWrapper {
                                         self.whitelist_command(split.next(), false).await;
                                     }
                                     "set_whitelist" => {
-                                        if let Some(arg) = split.next() {
+                                        let m = if let Some(arg) = split.next() {
                                             match arg {
                                                 "on" | "true" => {
                                                     self.channel_sender
                                                         .send(ChannelCommand::SetWhitelist(true))
                                                         .await
                                                         .unwrap();
-                                                    self.respond("Whitelist on.".to_string()).await;
+                                                    "Whitelist on.".to_string()
                                                 }
                                                 "off" | "false" => {
                                                     self.channel_sender
                                                         .send(ChannelCommand::SetWhitelist(false))
                                                         .await
                                                         .unwrap();
-                                                    self.respond("Whitelist off.".to_string())
-                                                        .await;
+                                                    "Whitelist off.".to_string()
                                                 }
                                                 _ => {
-                                                    self.respond(format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)).await;
+                                                    format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)
                                                 }
-                                            };
+                                            }
                                         } else {
-                                            self.respond("No argument provided".to_string()).await;
-                                        }
+                                            "No argument provided".to_string()
+                                        };
+                                        self.respond(m).await;
                                     }
                                     "set_allow_new_accounts" => {
-                                        if let Some(arg) = split.next() {
+                                        let m = if let Some(arg) = split.next() {
                                             match arg {
                                                 "on" | "true" => {
                                                     self.channel_sender
@@ -306,10 +307,7 @@ impl ConnectionReaderWrapper {
                                                         ))
                                                         .await
                                                         .unwrap();
-                                                    self.respond(
-                                                        "Allow new accounts on.".to_string(),
-                                                    )
-                                                    .await;
+                                                    "Allow new accounts on.".to_string()
                                                 }
                                                 "off" | "false" => {
                                                     self.channel_sender
@@ -318,18 +316,16 @@ impl ConnectionReaderWrapper {
                                                         ))
                                                         .await
                                                         .unwrap();
-                                                    self.respond(
-                                                        "Allow new accounts off.".to_string(),
-                                                    )
-                                                    .await;
+                                                    "Allow new accounts off.".to_string()
                                                 }
                                                 _ => {
-                                                    self.respond(format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)).await;
+                                                    format!("Invalid argument: {}.\nExpected \"on\"/\"off\"", arg)
                                                 }
-                                            };
+                                            }
                                         } else {
-                                            self.respond("No argument provided".to_string()).await;
-                                        }
+                                            "No argument provided".to_string()
+                                        };
+                                        self.respond(m).await;
                                     }
                                     c => {
                                         self.respond(format!("Unknown command: {}", c)).await;
