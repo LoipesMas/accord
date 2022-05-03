@@ -35,47 +35,39 @@ impl AccordChannel {
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
         let mut rng = OsRng;
-        let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("failed to generate a key");
+        let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("Failed to generate a key.");
         let pub_key = RsaPublicKey::from(&priv_key);
-        
-        // postgres://USER:PASSWORD@HOST:PORT/DATABASE_NAME
+
         let database_config = format!(
             "host='{}' port='{}' user='{}' password='{}' dbname='{}'",
             config.db_host, config.db_port, config.db_user, config.db_pass, config.db_dbname,
         );
 
-        let (db_client, db_connection) = match tokio_postgres::connect(
-            &database_config,
-            NoTls,
-        )
-        .await
+        let (db_client, db_connection) = match tokio_postgres::connect(&database_config, NoTls)
+            .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::error!("Postgres connection ({}) error: {}\n(Make sure that the postgres server is running!)", database_config, e);
+                log::error!("Postgres connection ({}) error: {}.\n(Make sure that the postgres server is running!)", database_config, e);
                 std::process::exit(-1)
             }
         };
 
         tokio::spawn(async move {
             if let Err(e) = db_connection.await {
-                log::error!("database connection error: {}", e);
+                log::error!("Database connection error: {}.", e);
             };
         });
 
-        
         // Prepare Database, panic if it fails and gives us the reason. Without this, the server will be useless anyway, so it is ok to panic here.
         // Friendly reminder @LoipesMas never silence errors, otherwise debugging will be a pain.
         log::info!("Preparing database...");
 
         // Create accord schema if not exists, handle errors
         let _ = db_client
-            .execute(
-                "CREATE SCHEMA IF NOT EXISTS accord",
-                &[],
-            )
+            .execute("CREATE SCHEMA IF NOT EXISTS accord", &[])
             .await
-            .expect("failed to create schema 'accord'");
+            .expect("Failed to create schema 'accord'.");
 
         // Create account table if not exists
         let _ = db_client
@@ -84,7 +76,7 @@ impl AccordChannel {
                 &[],
             )
             .await
-            .expect("failed to create table 'accounts'");
+            .expect("Failed to create table 'accounts'.");
 
         // Create images table if not exists
         let _ = db_client
@@ -93,7 +85,7 @@ impl AccordChannel {
                 &[],
             )
             .await
-            .expect("failed to create table 'images'");
+            .expect("Failed to create table 'images'.");
 
         // Create messages table if not exists
         let _ = db_client
@@ -105,12 +97,9 @@ impl AccordChannel {
                     );",
         &[],
         ).await
-        .expect("failed to create table 'messages'");
+        .expect("Failed to create table 'messages'.");
 
-
-        log::info!("DONE: Preparing database");
-
-
+        log::info!("DONE: Preparing database.");
 
         let s = Self {
             receiver,
@@ -134,9 +123,9 @@ impl AccordChannel {
                 Write(p) => {
                     match p {
                         ClientboundPacket::ImageMessage(ref im) => {
-                            log::info!("Image from {}", im.sender);
+                            log::info!("Image from {}.", im.sender);
                         }
-                        _ => log::info!("Message: {:?}", &p),
+                        _ => log::info!("Message: {:?}.", &p),
                     }
                     match &p {
                         ClientboundPacket::Message(message) => {
@@ -173,7 +162,7 @@ impl AccordChannel {
                         let padding = PaddingScheme::new_pkcs1v15_encrypt();
                         self.priv_key
                             .decrypt(padding, &enc_t)
-                            .expect("failed to decrypt")
+                            .expect("Failed to decrypt.")
                     };
                     if t != exp_t {
                         log::error!("Encryption handshake failed!");
@@ -184,7 +173,7 @@ impl AccordChannel {
                             let padding = PaddingScheme::new_pkcs1v15_encrypt();
                             self.priv_key
                                 .decrypt(padding, &enc_s)
-                                .expect("failed to decrypt")
+                                .expect("Failed to decrypt.")
                         };
                         otx.send(Ok(s.clone())).unwrap();
                         tx.send(ConnectionCommand::SetSecret(Some(s.clone())))
@@ -208,7 +197,7 @@ impl AccordChannel {
                     }
                 }
                 UserLeft(addr) => {
-                    log::info!("Connection ended from: {}", addr);
+                    log::info!("Connection ended from: {}.", addr);
                     self.txs.remove(&addr);
                     if let Some(username) = self.connected_users.remove(&addr) {
                         for tx_ in self.txs.values() {
@@ -224,7 +213,7 @@ impl AccordChannel {
                     let tx = self
                         .txs
                         .get(&addr)
-                        .unwrap_or_else(|| panic!("Wrong reply addr: {}", addr));
+                        .unwrap_or_else(|| panic!("Wrong reply addr: {}.", addr));
                     tx.send(ConnectionCommand::Write(ClientboundPacket::UsersOnline(
                         self.connected_users.values().cloned().collect(),
                     )))
@@ -335,13 +324,13 @@ impl AccordChannel {
                     if self.connected_users.values().any(|u| u == &username) {
                         Err("Already logged in.".to_string())
                     } else {
-                        log::info!("Logged in: {}", username);
+                        log::info!("Logged in: {}.", username);
                         let user_id: i64 = row.get("user_id");
                         let username: String = row.get("username");
                         Ok(format!("{}|{}", user_id, username))
                     }
                 } else {
-                    Err("Incorrect password".to_string())
+                    Err("Incorrect password.".to_string())
                 }
             } else {
                 // New account
@@ -349,12 +338,12 @@ impl AccordChannel {
                     let mut salt = [0; 64];
                     self.salt_generator.fill_bytes(&mut salt);
                     let pass_hash = hash_password(password, salt);
-                    
+
                     if let Some(row) = self.insert_user(&username, &pass_hash, &salt).await {
-                        log::info!("New account: {}", username);
+                        log::info!("New account: {}.", username);
                         let user_id: i64 = row.get("user_id");
                         let username: String = row.get("username");
-                        
+
                         Ok(format!("{}|{}", user_id, username))
                     } else {
                         Err("Failed to create account.".to_string())
@@ -367,15 +356,20 @@ impl AccordChannel {
                 self.connected_users.insert(addr, username);
                 self.txs.insert(addr, tx);
             } else {
-                log::info!("Failed to log in: {}", username);
+                log::info!("Failed to log in: {}.", username);
             }
             otx.send(res).unwrap();
         } else {
-            panic!("Provided not login packet to handle_login")
+            panic!("Provided not login packet to handle_login.")
         }
     }
 
-    async fn insert_user(&self, username: &str, pass_hash: &[u8], salt: &[u8]) -> Option<tokio_postgres::Row> {
+    async fn insert_user(
+        &self,
+        username: &str,
+        pass_hash: &[u8],
+        salt: &[u8],
+    ) -> Option<tokio_postgres::Row> {
         self.db_client
             .query_opt(
                 "INSERT INTO accord.accounts(username, password, salt) VALUES ($1, $2, $3) RETURNING *",
@@ -386,7 +380,10 @@ impl AccordChannel {
     }
     async fn get_user(&self, username: &str) -> Option<tokio_postgres::Row> {
         self.db_client
-            .query_opt("SELECT user_id, username, password, salt FROM accord.accounts WHERE username=$1", &[&username])
+            .query_opt(
+                "SELECT user_id, username, password, salt FROM accord.accounts WHERE username=$1",
+                &[&username],
+            )
             .await
             .unwrap()
     }
@@ -443,7 +440,10 @@ impl AccordChannel {
     async fn fetch_image(&self, hash: i32) -> Vec<u8> {
         let r = self
             .db_client
-            .query("SELECT data FROM accord.images WHERE image_hash=$1", &[&hash])
+            .query(
+                "SELECT data FROM accord.images WHERE image_hash=$1",
+                &[&hash],
+            )
             .await
             .unwrap();
         r.get(0).unwrap().get::<_, Vec<u8>>("data")

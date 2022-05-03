@@ -254,7 +254,12 @@ impl ConnectionHandler {
     ) {
         'l: loop {
             match reader.read_packet(&secret, nonce_generator.as_mut()).await {
-                Ok(Some(ClientboundPacket::Message(Message { text, sender_id, sender, time }))) => {
+                Ok(Some(ClientboundPacket::Message(Message {
+                    text,
+                    sender_id,
+                    sender,
+                    time,
+                }))) => {
                     let time = chrono::Local.timestamp(time as i64, 0);
                     submit_command(
                         event_sink,

@@ -41,7 +41,7 @@ const CONFIG_FILE: &str = "config.toml";
 fn config_path() -> PathBuf {
     let mut path = config_path_dir();
     path.push(CONFIG_FILE);
-    log::info!("config path: {:?}", path);
+    log::info!("Config path: {:?}.", path);
     path
 }
 
