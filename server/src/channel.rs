@@ -18,6 +18,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
+use anyhow::{Context, Result};
+
 pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>>,
@@ -30,12 +32,13 @@ pub struct AccordChannel {
 }
 
 impl AccordChannel {
-    pub async fn spawn(receiver: Receiver<ChannelCommand>, config: Config) {
+    pub async fn spawn(receiver: Receiver<ChannelCommand>, config: Config) -> Result<()> {
         // Setup
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, String> = HashMap::new();
         let mut rng = OsRng;
-        let priv_key = RsaPrivateKey::new(&mut rng, RSA_BITS).expect("Failed to generate a key.");
+        let priv_key =
+            RsaPrivateKey::new(&mut rng, RSA_BITS).with_context(|| "Failed to generate a key.")?;
         let pub_key = RsaPublicKey::from(&priv_key);
 
         let database_config = format!(
@@ -43,15 +46,9 @@ impl AccordChannel {
             config.db_host, config.db_port, config.db_user, config.db_pass, config.db_dbname,
         );
 
-        let (db_client, db_connection) = match tokio_postgres::connect(&database_config, NoTls)
+        let (db_client, db_connection) = tokio_postgres::connect(&database_config, NoTls)
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("Postgres connection ({}) error: {}.\n(Make sure that the postgres server is running!)", database_config, e);
-                std::process::exit(-1)
-            }
-        };
+            .with_context(|| format!("Postgres connection ({}) error.", database_config))?;
 
         tokio::spawn(async move {
             if let Err(e) = db_connection.await {
@@ -67,7 +64,7 @@ impl AccordChannel {
         let _ = db_client
             .execute("CREATE SCHEMA IF NOT EXISTS accord", &[])
             .await
-            .expect("Failed to create schema 'accord'.");
+            .with_context(|| "Failed to create schema 'accord'.")?;
 
         // Create account table if not exists
         let _ = db_client
@@ -76,7 +73,7 @@ impl AccordChannel {
                 &[],
             )
             .await
-            .expect("Failed to create table 'accounts'.");
+            .with_context(|| "Failed to create table 'accounts'.")?;
 
         // Create images table if not exists
         let _ = db_client
@@ -85,7 +82,7 @@ impl AccordChannel {
                 &[],
             )
             .await
-            .expect("Failed to create table 'images'.");
+            .with_context(|| "Failed to create table 'images'.")?;
 
         // Create messages table if not exists
         let _ = db_client
@@ -97,7 +94,7 @@ impl AccordChannel {
                     );",
         &[],
         ).await
-        .expect("Failed to create table 'messages'.");
+        .with_context(|| "Failed to create table 'messages'.")?;
 
         log::info!("DONE: Preparing database.");
 
@@ -113,13 +110,20 @@ impl AccordChannel {
         };
         // Launch channel loop
         tokio::spawn(s.channel_loop());
+        Ok(())
     }
 
     async fn channel_loop(mut self) {
         loop {
             use ChannelCommand::*;
-            let p = self.receiver.recv().await.unwrap();
+            let p = match self.receiver.recv().await {
+                Some(p) => p,
+                None => break,
+            };
             match p {
+                Close => {
+                    break;
+                }
                 Write(p) => {
                     match p {
                         ClientboundPacket::ImageMessage(ref im) => {
@@ -197,9 +201,9 @@ impl AccordChannel {
                     }
                 }
                 UserLeft(addr) => {
-                    log::info!("Connection ended from: {}.", addr);
                     self.txs.remove(&addr);
                     if let Some(username) = self.connected_users.remove(&addr) {
+                        log::info!("Connection ended from: {} ({}).", username, addr);
                         for tx_ in self.txs.values() {
                             tx_.send(ConnectionCommand::Write(ClientboundPacket::UserLeft(
                                 username.clone(),
@@ -207,6 +211,16 @@ impl AccordChannel {
                             .await
                             .ok();
                         }
+                    } else {
+                        log::info!("Connection ended from: {}", addr);
+                    }
+                }
+                UsersQueryTUI(otx) => {
+                    if otx
+                        .send(self.connected_users.values().cloned().collect())
+                        .is_err()
+                    {
+                        log::error!("Error while getting user list in TUI");
                     }
                 }
                 UsersQuery(addr) => {
@@ -324,9 +338,14 @@ impl AccordChannel {
                     if self.connected_users.values().any(|u| u == &username) {
                         Err("Already logged in.".to_string())
                     } else {
-                        log::info!("Logged in: {}.", username);
                         let user_id: i64 = row.get("user_id");
                         let username: String = row.get("username");
+                        log::info!(
+                            "Logged in: {} (user_id: {}) from {}.",
+                            username,
+                            user_id,
+                            addr
+                        );
                         Ok(format!("{}|{}", user_id, username))
                     }
                 } else {
@@ -352,11 +371,11 @@ impl AccordChannel {
                     Err("Account creation disabled.".to_string())
                 }
             };
-            if res.is_ok() {
+            if let Err(ref e) = res {
+                log::info!("Failed to log in: {}, reason: {}", username, e);
+            } else {
                 self.connected_users.insert(addr, username);
                 self.txs.insert(addr, tx);
-            } else {
-                log::info!("Failed to log in: {}.", username);
             }
             otx.send(res).unwrap();
         } else {

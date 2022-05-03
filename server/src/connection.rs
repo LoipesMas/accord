@@ -195,7 +195,7 @@ impl ConnectionReaderWrapper {
                         Message(m) => {
                             if verify_message(&m) {
                                 let p = ClientboundPacket::Message(accord::packets::Message {
-                                    sender_id: self.user_id.clone().unwrap(),
+                                    sender_id: self.user_id.unwrap(),
                                     sender: self.username.clone().unwrap(),
                                     text: m,
                                     time: current_time_as_sec(),
@@ -213,7 +213,7 @@ impl ConnectionReaderWrapper {
                             let p =
                                 ClientboundPacket::ImageMessage(accord::packets::ImageMessage {
                                     image_bytes: im,
-                                    sender_id: self.user_id.clone().unwrap(),
+                                    sender_id: self.user_id.unwrap(),
                                     sender: self.username.clone().unwrap(),
                                     time: current_time_as_sec(),
                                 });
@@ -368,9 +368,9 @@ impl ConnectionReaderWrapper {
                 Ok(p) => {
                     match p {
                         Some(ServerboundPacket::ImageMessage(_)) => {
-                            log::info!("Got image packet");
+                            log::trace!("Got image packet");
                         }
-                        _ => log::info!("Got packet: {:?}", p),
+                        _ => log::trace!("Got packet: {:?}", p),
                     }
                     if let Some(p) = p {
                         self.handle_packet(p).await;

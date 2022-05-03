@@ -20,6 +20,7 @@ pub enum ConnectionCommand {
 
 #[derive(Debug)]
 pub enum ChannelCommand {
+    Close,
     Write(ClientboundPacket),
     EncryptionRequest(Sender<ConnectionCommand>, OSender<Vec<u8>>),
     // Maybe this should be a struct?
@@ -40,6 +41,7 @@ pub enum ChannelCommand {
     UserJoined(String),
     UserLeft(SocketAddr),
     UsersQuery(SocketAddr),
+    UsersQueryTUI(OSender<Vec<String>>),
     FetchMessages(i64, i64, OSender<Vec<ClientboundPacket>>),
     CheckPermissions(String, OSender<UserPermissions>),
     KickUser(String),
