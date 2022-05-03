@@ -19,10 +19,21 @@ Packet design and handshake inspired partially by Minecraft.
 - Server management (banning, whitelists, etc)
 
 
-## GUI requirements
+## GUI
+### Requirements
 Because accord's gui client uses `druid`, it requires gtk on Linux and BSD.  
 See [druid's Readme notes](https://github.com/linebender/druid#platform-notes) for more information.
 
+### Configuration
+GUI's theme (and some saved data) can be edited in `config.toml` file.
+- On Unix system it's in `$XDG_CONFIG_HOME/accord-gui/config.toml`
+- On Windows system it's in `$LOCALAPPDATA/accord-gui/config.toml`  
+
+Colors are in hexadecimal format (`#rrggbb`, `#rrggbbaa`, `#rbg` or `#rbga`).
+
+### Images from links
+GUI client can automatically try to load an image from a message with a link, however this is a potential security risk (e.g. IP grabbing), so it's disabled by default.  
+(If you're using a VPN or a proxy, then the risk should be nonexistent and in worst-case scenario it's still less risky than clicking on a random link.)
 
 ## Short-term goals
 - Improve GUI experience (sidebar with active users, loading up past messages and more)
