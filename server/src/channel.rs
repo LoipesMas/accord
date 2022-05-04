@@ -410,16 +410,16 @@ impl AccordChannel {
         // Insert image into db
         self.db_client
             .execute(
-                "INSERT INTO accord.images VALUES ($1, $2)",
+                "INSERT INTO accord.images VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 &[&hash, &message.image_bytes],
             )
             .await
-            .ok(); // It's ok if the image already exists in db
+            .unwrap();
 
         // Inser message with hash as a foreign key
         self.db_client
             .execute(
-                "INSERT INTO accord.messages (sender_id, sender, content, send_time, image_hash) VALUES ($1, '', $2, $3, $4)",
+                "INSERT INTO accord.messages (sender_id, sender, content, send_time, image_hash) VALUES ($1, $2, '', $3, $4)",
                 &[&message.sender_id, &message.sender, &(message.time as i64), &hash],
             )
             .await
