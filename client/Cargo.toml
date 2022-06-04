@@ -10,7 +10,8 @@ version = "0.2.0"
 accord = {path = ".."}
 bytes = "1.1"
 chrono = "0.4.19"
-console_engine = {version = "2.3.0", features = ["event"]}
+clap = {version = "3.1.18", features = ["derive"]}
+console_engine = {version = "2.4.0", features = ["event", "form"]}
 rand = "0.8.4"
 rand_chacha = "0.3.1"
 rsa = "0.5.0"

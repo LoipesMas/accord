@@ -1,11 +1,20 @@
-use console::InputWindow;
-use console::LoginWindow;
+use client::Client;
+use client::ClientReader;
+use client::ClientWriter;
 use console::MessageWindow;
 use console::UserListWindow;
 use console_engine::crossterm::event::KeyEvent;
 use console_engine::crossterm::event::MouseEvent;
 use console_engine::crossterm::event::MouseEventKind;
+use console_engine::forms;
+use console_engine::forms::constraints;
+use console_engine::forms::Form;
+use console_engine::forms::FormField;
+use console_engine::forms::FormOptions;
+use console_engine::forms::FormStyle;
+use console_engine::forms::FormValue;
 use console_engine::pixel;
+use console_engine::rect_style::BorderStyle;
 use console_engine::Color;
 use console_engine::ConsoleEngine;
 use console_engine::KeyCode;
@@ -13,85 +22,71 @@ use console_engine::KeyModifiers;
 use std::error::Error;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::net::TcpStream;
+
 use tokio::sync::mpsc::error::SendError;
 
-use accord::connection::*;
-
 use accord::packets::*;
-
-use accord::{ENC_TOK_LEN, SECRET_LEN};
 
 use std::net::SocketAddr;
 
 use tokio::sync::{mpsc, oneshot};
 
-use rand::{rngs::OsRng, Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
-
-use rsa::PaddingScheme;
-use rsa::PublicKey;
-
 use crate::console::ConsoleMessage;
 
+use clap::Parser;
+
+mod client;
 mod console;
 
+/// Accord client - Terminal User Interface for the instant messaging chat system over TCP
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Address of the server to connect to
+    #[clap(default_value = "127.0.0.1")]
+    address: String,
+    /// Port of the server
+    #[clap(short, long, default_value_t = accord::DEFAULT_PORT)]
+    port: u16,
+}
+
 // TODO: config file?
+const THEME_BG: Color = Color::Rgb { r: 32, g: 7, b: 47 };
+const THEME_FG: Color = Color::Cyan;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     //==================================
     //      Parse args
     //==================================
-    let mut args = std::env::args();
-    let addr = SocketAddr::from_str(&format!(
-        "{}:{}",
-        args.nth(1).unwrap_or_else(|| "127.0.0.1".to_string()),
-        accord::DEFAULT_PORT
-    ))
-    .unwrap();
+    let args = Args::parse();
+
+    let addr = SocketAddr::from_str(&format!("{}:{}", args.address, args.port)).unwrap();
 
     let mut console = ConsoleEngine::init_fill_require(40, 10, 10).unwrap();
     console.set_title("Accord TUI");
-    let (reader, mut writer, secret, nonce_generator_read, mut nonce_generator_write) =
-        login(&mut console, addr).await;
+
+    let mut client = login(&mut console, addr).await?;
 
     // Get player list on join
-    writer
-        .write_packet(
-            ServerboundPacket::Command("list".to_string()),
-            &secret,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
+    client
+        .send(ServerboundPacket::Command("list".to_string()))
+        .await?;
 
     // Get last 20 messages
-    writer
-        .write_packet(
-            ServerboundPacket::FetchMessages(0, 20),
-            &secret,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
+    client.send(ServerboundPacket::FetchMessages(0, 20)).await?;
 
     // To send close command when tcpstream is closed
     let (tx, rx) = oneshot::channel::<()>();
 
     let (console_tx, console_rx) = mpsc::unbounded_channel::<ConsoleMessage>();
 
+    let (client_r, client_w) = client.breakdown();
+
     if let Err(e) = tokio::try_join!(
-        reading_loop(reader, console_tx, rx, secret.clone(), nonce_generator_read),
+        reading_loop(client_r, console_tx, rx),
         //writing_loop(writer, rx, secret.clone(), nonce_generator_write),
-        console_loop(
-            console,
-            console_rx,
-            writer,
-            tx,
-            secret.clone(),
-            nonce_generator_write
-        )
+        console_loop(client_w, console, console_rx, tx,)
     ) {
         if e.downcast_ref::<SendError<ConsoleMessage>>().is_none() {
             panic!("{:?}", e);
@@ -101,262 +96,152 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn login(
-    console: &mut ConsoleEngine,
-    addr: SocketAddr,
-) -> (
-    ConnectionReader<ClientboundPacket>,
-    ConnectionWriter<ServerboundPacket>,
-    Option<Vec<u8>>,
-    Option<ChaCha20Rng>,
-    Option<ChaCha20Rng>,
-) {
-    // let w_log = MessageWindow::new(console.get_width(), console.get_height());
+async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, Box<dyn Error>> {
     let mut login_width = std::cmp::max(console.get_width() / 6, 20);
-    let mut w_login = LoginWindow::new(login_width);
 
-    // println!("Connecting to: {}", addr);
-    let socket = TcpStream::connect(addr).await.unwrap();
+    let mut client = Client::init(addr).await?;
 
-    // println!("Connected!");
-    let connection = Connection::<ClientboundPacket, ServerboundPacket>::new(socket);
-    let (mut reader, mut writer) = connection.split();
-
-    //==================================
-    //      Encryption
-    //==================================
-    // println!("Establishing encryption...");
-    let secret = None;
-    let mut nonce_generator_write = None;
-    let mut nonce_generator_read = None;
-
-    // Request encryption
-    writer
-        .write_packet(
-            ServerboundPacket::EncryptionRequest,
-            &secret,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
-
-    // Handle encryption response
-    let pub_key: rsa::RsaPublicKey;
-    let token = if let Ok(Some(p)) = reader
-        .read_packet(&secret, nonce_generator_read.as_mut())
-        .await
-    {
-        match p {
-            ClientboundPacket::EncryptionResponse(pub_key_der, token_) => {
-                pub_key = rsa::pkcs8::FromPublicKey::from_public_key_der(&pub_key_der).unwrap();
-                assert_eq!(ENC_TOK_LEN, token_.len());
-                token_
-            }
-            _ => {
-                panic!("Encryption failed. Server response: {:?}", p);
-            }
-        }
-    } else {
-        panic!("Failed to establish encryption");
+    let form_theme = FormStyle {
+        border: Some(BorderStyle::new_light().with_colors(THEME_FG, THEME_BG)),
+        fg: THEME_FG,
+        bg: THEME_BG,
     };
 
-    // Generate secret
-    let mut secret = [0u8; SECRET_LEN];
-    OsRng.fill(&mut secret);
+    let mut login_form = Form::new(
+        login_width,
+        6,
+        FormOptions {
+            style: form_theme,
+            ..Default::default()
+        },
+    );
 
-    // Encrypt and send
-    let padding = PaddingScheme::new_pkcs1v15_encrypt();
-    let enc_secret = pub_key
-        .encrypt(&mut OsRng, padding, &secret[..])
-        .expect("failed to encrypt");
-    let padding = PaddingScheme::new_pkcs1v15_encrypt();
-    let enc_token = pub_key
-        .encrypt(&mut OsRng, padding, &token[..])
-        .expect("failed to encrypt");
-    writer
-        .write_packet(
-            ServerboundPacket::EncryptionConfirm(enc_secret, enc_token),
-            &None,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
+    login_form.build_field::<forms::Text>(
+        "username",
+        FormOptions {
+            style: form_theme,
+            label: Some("Username"),
+            constraints: vec![
+                constraints::NotBlank::new("Please input a username"),
+                constraints::Alphanumeric::new("Username must be alphanumeric"),
+            ],
+            ..Default::default()
+        },
+    );
+    login_form.build_field::<forms::HiddenText>(
+        "password",
+        FormOptions {
+            style: form_theme,
+            label: Some("Password"),
+            constraints: vec![constraints::NotBlank::new("Password shouldn't be blank")],
+            ..Default::default()
+        },
+    );
+    login_form.set_active(true);
+    let mut login_x = (console.get_width() as i32 - login_width as i32) / 2;
+    let mut login_y = (console.get_height() as i32 - 7) / 2;
 
-    // From this point onward we assume everything is encrypted
-    let secret = Some(secret.to_vec());
-    let mut seed = [0u8; accord::SECRET_LEN];
-    seed.copy_from_slice(&secret.as_ref().unwrap()[..]);
-    nonce_generator_write = Some(ChaCha20Rng::from_seed(seed));
-    nonce_generator_read = Some(ChaCha20Rng::from_seed(seed));
-
-    // Expect EncryptionAck (should be encrypted)
-    let p = reader
-        .read_packet(&secret, nonce_generator_read.as_mut())
-        .await;
-    match p {
-        Ok(Some(ClientboundPacket::EncryptionAck)) => {}
-        Ok(_) => {
-            panic!("Failed encryption step 2. Server response: {:?}", p);
-        }
-        Err(e) => {
-            panic!("{}", e);
-        }
-    }
+    let mut logged_in = false;
 
     //==================================
     //      Get credentials
     //==================================
 
-    while !w_login.is_finished() {
-        match console.poll() {
-            console_engine::events::Event::Key(KeyEvent { code, modifiers }) => {
-                if let Some(prompt) = w_login.get_active_prompt() {
-                    match code {
-                        KeyCode::Enter => {
-                            if w_login.is_prompting_username() {
-                                w_login.submit();
-                                console.print_fbg(
-                                    0,
-                                    0,
-                                    "                                      ",
-                                    Color::Red,
-                                    Color::Reset,
-                                );
-                                if w_login.get_username().is_empty() {
-                                    w_login.reset();
-                                    console.print_fbg(
-                                        0,
-                                        0,
-                                        "Username can't be empty!              ",
-                                        Color::Red,
-                                        Color::Reset,
-                                    )
-                                }
-                                if w_login.get_username().len() > 17 {
-                                    w_login.reset();
-                                    console.print_fbg(
-                                        0,
-                                        0,
-                                        "Username too long. (Max 17 characters)",
-                                        Color::Red,
-                                        Color::Reset,
-                                    )
-                                }
-                            } else {
-                                w_login.submit();
-                            }
-                        }
-                        KeyCode::Esc => std::process::exit(0),
-                        KeyCode::Backspace => prompt.remove_char(1),
-                        KeyCode::Delete => prompt.remove_char(-1),
-                        KeyCode::Left => prompt.move_cursor(-1),
-                        KeyCode::Right => prompt.move_cursor(1),
-                        KeyCode::Home => prompt.move_cursor(i32::MIN),
-                        KeyCode::End => prompt.move_cursor(i32::MAX),
-                        KeyCode::Char(c) => {
-                            if c.is_alphanumeric() {
-                                if modifiers.is_empty() {
-                                    prompt.put_char(c);
-                                }
-                                if modifiers == KeyModifiers::SHIFT {
-                                    // I don't understand why it works this way but not the other
-                                    if c.is_ascii_uppercase() {
-                                        prompt.put_char(c.to_ascii_uppercase());
-                                    } else {
-                                        prompt.put_char(c.to_ascii_lowercase());
-                                    }
-                                }
-                            } else {
-                                console.print_fbg(
-                                    0,
-                                    0,
-                                    "Input must be alphanumeric",
-                                    Color::Red,
-                                    Color::Reset,
-                                )
-                            }
-                            if modifiers == KeyModifiers::CONTROL && c == 'c' {
-                                std::process::exit(0);
-                            }
-                        }
-                        _ => {}
-                    }
+    'login: while !logged_in {
+        while !login_form.is_finished() {
+            match console.poll() {
+                // exit with escape
+                console_engine::events::Event::Key(KeyEvent {
+                    code: KeyCode::Esc,
+                    modifiers: KeyModifiers::NONE,
+                }) => {
+                    break 'login;
+                }
+                // exit with ctrl+C
+                console_engine::events::Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                }) => {
+                    break 'login;
+                }
+                // handle terminal resizing
+                console_engine::events::Event::Resize(_, _) => {
+                    console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
+                    console.check_resize();
+                    login_width = std::cmp::max(console.get_width() / 6, 20);
+                    login_form.resize(login_width, 6);
+                    login_x = (console.get_width() as i32 - login_width as i32) / 2;
+                    login_y = (console.get_height() as i32 - 7) / 2;
+                }
+                // other events are passed to the form
+                event => login_form.handle_event(event),
+            }
+            console.print_screen(
+                login_x,
+                login_y,
+                login_form.draw((console.frame_count % 10 < 5) as usize),
+            );
+            console.draw();
+        }
+        if let (Ok(FormValue::String(username)), Ok(FormValue::String(password))) = (
+            login_form.get_validated_field_output("username"),
+            login_form.get_validated_field_output("password"),
+        ) {
+            if let Err(error) = client.login(username, password).await {
+                console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
+                console.print_fbg(0, 0, &error.to_string(), Color::Red, THEME_BG);
+                console.draw();
+                login_form.reset();
+                login_form.set_active(true);
+            } else {
+                logged_in = true;
+            }
+        } else {
+            console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
+            let mut pos = 0;
+            if let Some(messages) = login_form.validate_field("username") {
+                for message in messages.iter() {
+                    console.print_fbg(0, pos, message, Color::Red, THEME_BG);
+                    pos += 1;
                 }
             }
-            console_engine::events::Event::Mouse(_) => {}
-            console_engine::events::Event::Resize(_, _) => {
-                console.clear_screen();
-                console.check_resize();
-                login_width = std::cmp::max(console.get_width() / 6, 20);
-                w_login.resize(login_width);
+            if let Some(messages) = login_form.validate_field("password") {
+                for message in messages.iter() {
+                    console.print_fbg(0, pos, message, Color::Red, THEME_BG);
+                    pos += 1;
+                }
             }
-            console_engine::events::Event::Frame => {}
+            login_form.reset();
         }
-        console.print_screen(
-            (console.get_width() as i32 - login_width as i32) / 2,
-            (console.get_height() as i32 - 7) / 2,
-            w_login.draw(console.frame_count),
-        );
-        console.draw();
     }
-    let username = w_login.get_username();
-    let password = w_login.get_password();
-
-    //==================================
-    //      Login
-    //==================================
-    // println!("Logging in...");
-    writer
-        .write_packet(
-            ServerboundPacket::Login {
-                username: username.to_string(),
-                password: password.to_string(),
-            },
-            &secret,
-            nonce_generator_write.as_mut(),
-        )
-        .await
-        .unwrap();
-
-    // Next packet must be login related
-    if let Ok(Some(p)) = reader
-        .read_packet(&secret, nonce_generator_read.as_mut())
-        .await
-    {
-        match p {
-            ClientboundPacket::LoginAck => {}
-            ClientboundPacket::LoginFailed(m) => {
-                panic!("Login failed: {}", m);
-            }
-            _ => {
-                panic!("Login failed. Server response: {:?}", p);
-            }
-        }
-    } else {
-        panic!("Failed to login ;/");
+    if !login_form.is_finished() {
+        Err("User cancelled login")?;
     }
 
-    (
-        reader,
-        writer,
-        secret,
-        nonce_generator_read,
-        nonce_generator_write,
-    )
+    Ok(client)
 }
 
 async fn console_loop(
+    mut client: ClientWriter,
     mut console: ConsoleEngine,
     mut msg_channel: mpsc::UnboundedReceiver<ConsoleMessage>,
-    mut writer: ConnectionWriter<ServerboundPacket>,
     close_sender: oneshot::Sender<()>,
-    secret: Option<Vec<u8>>,
-    mut nonce_generator: Option<ChaCha20Rng>,
 ) -> Result<(), Box<dyn Error>> {
     let mut col2 = std::cmp::max(console.get_width() / 8, 10) - 1;
     let mut w_userlist = UserListWindow::new(col2 + 1, console.get_height());
     let mut w_messages = MessageWindow::new(console.get_width() - col2, console.get_height() - 2);
-    let mut w_input = InputWindow::new(console.get_width() - col2);
+    let mut w_input = forms::Text::new(
+        console.get_width() - col2,
+        FormOptions {
+            style: FormStyle {
+                fg: THEME_FG,
+                bg: THEME_BG,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    w_input.set_active(true);
 
     loop {
         // force awaiting because this loop is mostly synchronous
@@ -390,58 +275,34 @@ async fn console_loop(
                 match code {
                     KeyCode::Enter => {
                         // send message
-                        let p = if let Some(command) = w_input.get_input_buffer().strip_prefix('/')
-                        {
-                            ServerboundPacket::Command(command.to_string())
-                        } else {
-                            ServerboundPacket::Message(w_input.get_input_buffer().to_string())
-                        };
-                        writer
-                            .write_packet(p, &secret, nonce_generator.as_mut())
-                            .await?;
-                        w_input.clear_input_buffer();
+                        if let FormValue::String(message) = w_input.get_output() {
+                            let p = if let Some(command) = message.strip_prefix('/') {
+                                ServerboundPacket::Command(command.to_string())
+                            } else {
+                                ServerboundPacket::Message(message)
+                            };
+                            client.send(p).await?;
+                            w_input.clear_input_buffer();
+                        }
                     }
-                    KeyCode::Backspace => w_input.remove_char(1),
-                    KeyCode::Delete => w_input.remove_char(-1),
                     KeyCode::Up => w_messages.scroll(-1),
                     KeyCode::Down => w_messages.scroll(1),
-                    KeyCode::Left => w_input.move_cursor(-1),
-                    KeyCode::Right => w_input.move_cursor(1),
                     KeyCode::PageUp => w_messages.scroll(-(console.get_height() as i32) - 3),
                     KeyCode::PageDown => w_messages.scroll((console.get_height() as i32) - 3),
-                    KeyCode::Home => w_input.move_cursor(i32::MIN),
-                    KeyCode::End => w_input.move_cursor(i32::MAX),
                     KeyCode::Esc => {
                         close_sender.send(()).unwrap();
                         break;
                     }
-                    KeyCode::Char(c) => {
-                        if modifiers.is_empty() {
-                            w_input.put_char(c);
-                        }
-                        if modifiers == KeyModifiers::SHIFT {
-                            // I don't understand why it works this way but not the other
-                            if c.is_ascii_uppercase() {
-                                w_input.put_char(c.to_ascii_uppercase());
-                            } else {
-                                w_input.put_char(c.to_ascii_lowercase());
-                            }
-                        }
-                        if modifiers == KeyModifiers::CONTROL {
-                            match c {
-                                'c' => {
-                                    close_sender.send(()).unwrap();
-                                    break;
-                                }
-                                'p' => {}
-                                _ => {}
-                            }
-                        }
+                    KeyCode::Char('c') if modifiers == KeyModifiers::CONTROL => {
+                        close_sender.send(()).unwrap();
+                        break;
                     }
-                    _ => {}
+                    _ => w_input.handle_event(console_engine::events::Event::Key(KeyEvent {
+                        code,
+                        modifiers,
+                    })),
                 }
             }
-            console_engine::events::Event::Frame => {}
             console_engine::events::Event::Mouse(MouseEvent {
                 kind,
                 column: _,
@@ -459,9 +320,9 @@ async fn console_loop(
                 col2 = std::cmp::max(console.get_width() / 8, 10) - 1;
                 w_userlist.resize(col2 + 1, console.get_height());
                 w_messages.resize(console.get_width() - col2, console.get_height() - 2);
-                w_input.resize(console.get_width() - col2);
-                // panic!("This program doesn't support terminal resizing yet!");
+                w_input.resize(console.get_width() - col2, 1);
             }
+            event => w_input.handle_event(event),
         }
         // update screen
         console.print_screen(0, 0, w_userlist.draw());
@@ -470,7 +331,7 @@ async fn console_loop(
             0,
             (col2 - 1) as i32,
             (console.get_height() - 1) as i32,
-            pixel::pxl_fbg(' ', Color::Black, Color::Grey),
+            pixel::pxl_fbg(' ', THEME_BG, THEME_FG),
         );
         console.print_screen(col2 as i32, 0, w_messages.draw());
         console.line(
@@ -478,12 +339,12 @@ async fn console_loop(
             (console.get_height() - 2) as i32,
             console.get_width() as i32,
             (console.get_height() - 2) as i32,
-            pixel::pxl_fbg(' ', Color::Black, Color::Grey),
+            pixel::pxl_fbg(' ', THEME_BG, THEME_FG),
         );
         console.print_screen(
             col2 as i32,
             (console.get_height() - 1) as i32,
-            w_input.draw(console.frame_count),
+            w_input.draw((console.frame_count % 10 < 5) as usize),
         );
         console.draw();
     }
@@ -491,14 +352,12 @@ async fn console_loop(
 }
 
 async fn reading_loop(
-    mut reader: ConnectionReader<ClientboundPacket>,
+    mut client: ClientReader,
     console_channel: mpsc::UnboundedSender<ConsoleMessage>,
     mut close_receiver: oneshot::Receiver<()>,
-    secret: Option<Vec<u8>>,
-    mut nonce_generator: Option<ChaCha20Rng>,
 ) -> Result<(), Box<dyn Error>> {
     'l: loop {
-        match reader.read_packet(&secret, nonce_generator.as_mut()).await {
+        match client.read().await {
             Ok(Some(ClientboundPacket::Message(message))) => {
                 console_channel.send(ConsoleMessage::AddMessage(message))?;
             }
@@ -517,6 +376,15 @@ async fn reading_loop(
                 console_channel.send(ConsoleMessage::RemoveUser(username))?;
             }
             Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
+                console_channel.send(ConsoleMessage::AddSystemMessage(String::from(
+                    "-- Users online --",
+                )))?;
+                for name in usernames.iter() {
+                    console_channel.send(ConsoleMessage::AddSystemMessage(String::from(name)))?;
+                }
+                console_channel.send(ConsoleMessage::AddSystemMessage(String::from(
+                    "------------------",
+                )))?;
                 console_channel.send(ConsoleMessage::RefreshUserList(usernames))?;
             }
             Ok(Some(ClientboundPacket::ImageMessage(im))) => {
