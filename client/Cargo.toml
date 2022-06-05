@@ -1,16 +1,18 @@
 [package]
+authors = ["LoipesMas"]
+edition = "2021"
 name = "accord-client"
 version = "0.2.0"
-edition = "2021"
-authors = ["LoipesMas"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 accord = {path = ".."}
-tokio = {version = "1.15.0", features = ["full"]}
 bytes = "1.1"
 chrono = "0.4.19"
-rsa = "0.5.0"
+clap = {version = "3.1.18", features = ["derive"]}
+console_engine = {version = "2.4.0", features = ["event", "form"]}
 rand = "0.8.4"
 rand_chacha = "0.3.1"
+rsa = "0.5.0"
+tokio = {version = "1.15.0", features = ["full"]}
