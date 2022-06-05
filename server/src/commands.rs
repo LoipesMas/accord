@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use tokio::sync::{mpsc::Sender, oneshot::Sender as OSender};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct UserPermissions {
     pub operator: bool,
     pub whitelisted: bool,

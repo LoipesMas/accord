@@ -232,7 +232,7 @@ impl Tui {
                             .send(ChannelCommand::KickUser(target.to_owned()))
                             .await
                             .unwrap();
-                        format!("{} kicked.", target)
+                        format!("Kicking {}.", target)
                     } else {
                         "No target provided".to_owned()
                     };
@@ -317,9 +317,9 @@ impl Tui {
                 .await
                 .unwrap();
             if switch {
-                format!("{} banned.", target)
+                format!("Banning {}", target)
             } else {
-                format!("{} unbanned.", target)
+                format!("Unbanning {}.", target)
             }
         } else {
             "No target provided".to_owned()
@@ -333,9 +333,9 @@ impl Tui {
                 .await
                 .unwrap();
             if switch {
-                format!("{} whitelisted.", target)
+                format!("Whitelisting {}.", target)
             } else {
-                format!("{} unwhitelisted.", target)
+                format!("Unwhitelisting {}.", target)
             }
         } else {
             "No target provided".to_owned()

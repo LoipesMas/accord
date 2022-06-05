@@ -13,8 +13,6 @@ pub struct Config {
     pub port: Option<u16>,
     pub operators: HashSet<String>,
     pub whitelist_on: bool,
-    pub whitelist: HashSet<String>,
-    pub banned_users: HashSet<String>,
     pub allow_new_accounts: bool,
 }
 
@@ -29,8 +27,6 @@ impl Default for Config {
             port: Some(accord::DEFAULT_PORT),
             operators: Default::default(),
             whitelist_on: false,
-            whitelist: Default::default(),
-            banned_users: Default::default(),
             allow_new_accounts: true,
         }
     }

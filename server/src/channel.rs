@@ -69,7 +69,14 @@ impl AccordChannel {
         // Create account table if not exists
         let _ = db_client
             .execute(
-                "CREATE TABLE IF NOT EXISTS accord.accounts (user_id serial8 NOT null PRIMARY KEY, username varchar(255) NOT NULL UNIQUE, password varchar(44) NOT NULL, salt varchar(88) NOT NULL);",
+                "CREATE TABLE IF NOT EXISTS accord.accounts (
+                    user_id serial8 NOT null PRIMARY KEY, 
+                    username varchar(255) NOT NULL UNIQUE, 
+                    password varchar(44) NOT NULL, 
+                    salt varchar(88) NOT NULL,
+                    banned bool NOT NULL DEFAULT false,
+                    whitelisted bool NOT NULL DEFAULT false
+                    );",
                 &[],
             )
             .await
@@ -259,11 +266,7 @@ impl AccordChannel {
                     otx.send(messages).unwrap();
                 }
                 CheckPermissions(username, otx) => {
-                    let perms = UserPermissions {
-                        operator: self.config.operators.contains(&username),
-                        banned: self.config.banned_users.contains(&username),
-                        whitelisted: self.config.whitelist.contains(&username),
-                    };
+                    let perms = self.get_user_perms(&username).await;
                     otx.send(perms).unwrap();
                 }
                 KickUser(username) => {
@@ -272,33 +275,29 @@ impl AccordChannel {
                 BanUser(username, switch) => {
                     if switch {
                         self.kick_user(&username).await;
-                        self.config.banned_users.insert(username);
-                    } else {
-                        self.config.banned_users.remove(&username);
                     }
-                    save_config(&self.config).unwrap();
+                    self.ban_user(&username, switch).await;
                 }
                 WhitelistUser(username, switch) => {
-                    if switch {
-                        self.config.whitelist.insert(username);
-                    } else {
-                        self.config.whitelist.remove(&username);
-                    }
-                    save_config(&self.config).unwrap();
+                    self.whitelist_user(&username, switch).await;
                 }
                 SetWhitelist(state) => {
                     self.config.whitelist_on = state;
+                    log::info!("Set whitelist: {}", state);
                     save_config(&self.config).unwrap();
                 }
                 SetAllowNewAccounts(state) => {
                     self.config.allow_new_accounts = state;
+                    log::info!("Set allow_new_accounts: {}", state);
                     save_config(&self.config).unwrap();
                 }
             };
         }
     }
 
+    /// Disconnects user from the channel
     async fn kick_user(&mut self, username: &str) {
+        log::info!("Kicked user {}", username);
         for (addr, un) in self.connected_users.iter() {
             if un == username {
                 self.txs
@@ -320,12 +319,12 @@ impl AccordChannel {
             tx,
         } = p
         {
-            // I don't like how the allow and deny lists work.. we have a database, but don't use it here..
+            let perms = self.get_user_perms(&username).await;
             let res = if !verify_username(&username) {
                 Err("Invalid username!".to_string())
-            } else if self.config.banned_users.contains(&username) {
+            } else if perms.banned {
                 Err("User banned.".to_string())
-            } else if self.config.whitelist_on && !self.config.whitelist.contains(&username) {
+            } else if self.config.whitelist_on && !perms.whitelisted {
                 Err("User not on whitelist.".to_string())
             } else if let Some(row) = self.get_user(&username).await {
                 // Account exists
@@ -466,6 +465,62 @@ impl AccordChannel {
             .await
             .unwrap();
         r.get(0).unwrap().get::<_, Vec<u8>>("data")
+    }
+
+    /// Returns permissions of a user
+    /// Default if user not in accounts
+    async fn get_user_perms(&self, username: &str) -> UserPermissions {
+        let r = self
+            .db_client
+            .query(
+                "SELECT banned, whitelisted FROM accord.accounts WHERE username=$1",
+                &[&username],
+            )
+            .await
+            .unwrap();
+
+        r.get(0)
+            .map(|r| UserPermissions {
+                operator: self.config.operators.contains(username),
+                banned: r.get::<_, bool>("banned"),
+                whitelisted: r.get::<_, bool>("whitelisted"),
+            })
+            .unwrap_or_default()
+    }
+
+    /// Bans (or unbans) a user
+    async fn ban_user(&self, username: &str, switch: bool) {
+        if switch {
+            log::info!("Banned user {}", username);
+        } else {
+            log::info!("Unbanned user {}", username);
+        }
+        self.db_client
+            .execute(
+                "UPDATE accord.accounts SET banned = $1 WHERE username = $2",
+                &[&switch, &username],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Whitelists (or unwhitelists) a user
+    async fn whitelist_user(&self, username: &str, switch: bool) {
+        let n = self.db_client
+            .execute(
+                "UPDATE accord.accounts SET whitelisted = $1 WHERE username = $2",
+                &[&switch, &username],
+            )
+            .await
+            .unwrap();
+        if n == 0 {
+            log::warn!("User {} not in database!", &username);
+        }
+        else if switch {
+            log::info!("Whitelisted user {}", username);
+        } else {
+            log::info!("Unwhitelisted user {}", username);
+        }
     }
 }
 
