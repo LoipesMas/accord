@@ -1,24 +1,16 @@
-use client::Client;
-use client::ClientReader;
-use client::ClientWriter;
-use console::MessageWindow;
-use console::UserListWindow;
-use console_engine::crossterm::event::KeyEvent;
-use console_engine::crossterm::event::MouseEvent;
-use console_engine::crossterm::event::MouseEventKind;
-use console_engine::forms;
-use console_engine::forms::constraints;
-use console_engine::forms::Form;
-use console_engine::forms::FormField;
-use console_engine::forms::FormOptions;
-use console_engine::forms::FormStyle;
-use console_engine::forms::FormValue;
-use console_engine::pixel;
-use console_engine::rect_style::BorderStyle;
-use console_engine::Color;
-use console_engine::ConsoleEngine;
-use console_engine::KeyCode;
-use console_engine::KeyModifiers;
+use client::{Client, ClientReader, ClientWriter};
+use console::{MessageWindow, UserListWindow};
+use console_engine::{
+    crossterm::event::{KeyEvent, MouseEvent, MouseEventKind},
+    forms::{
+        self,
+        constraints::{self, Callback},
+        Form, FormField, FormOptions, FormStyle, FormValue,
+    },
+    pixel,
+    rect_style::BorderStyle,
+    Color, ConsoleEngine, KeyCode, KeyModifiers,
+};
 use std::error::Error;
 use std::str::FromStr;
 use std::time::Duration;
@@ -41,14 +33,7 @@ mod console;
 /// Accord client - Terminal User Interface for the instant messaging chat system over TCP
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
-struct Args {
-    /// Address of the server to connect to
-    #[clap(default_value = "127.0.0.1")]
-    address: String,
-    /// Port of the server
-    #[clap(short, long, default_value_t = accord::DEFAULT_PORT)]
-    port: u16,
-}
+struct Args {}
 
 // TODO: config file?
 const THEME_BG: Color = Color::Rgb { r: 32, g: 7, b: 47 };
@@ -59,14 +44,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //==================================
     //      Parse args
     //==================================
-    let args = Args::parse();
-
-    let addr = SocketAddr::from_str(&format!("{}:{}", args.address, args.port)).unwrap();
+    let _args = Args::parse();
 
     let mut console = ConsoleEngine::init_fill_require(40, 10, 10).unwrap();
     console.set_title("Accord TUI");
 
-    let mut client = login(&mut console, addr).await?;
+    let mut client = login(&mut console).await?;
 
     // Get player list on join
     client
@@ -96,10 +79,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, Box<dyn Error>> {
+async fn login(console: &mut ConsoleEngine) -> Result<Client, Box<dyn Error>> {
     let mut login_width = std::cmp::max(console.get_width() / 6, 20);
-
-    let mut client = Client::init(addr).await?;
 
     let form_theme = FormStyle {
         border: Some(BorderStyle::new_light().with_colors(THEME_FG, THEME_BG)),
@@ -109,12 +90,34 @@ async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, 
 
     let mut login_form = Form::new(
         login_width,
-        6,
+        8,
         FormOptions {
             style: form_theme,
             ..Default::default()
         },
     );
+
+    let mut address_field = forms::Text::new(
+        1,
+        FormOptions {
+            style: form_theme,
+            label: Some("Address"),
+            constraints: vec![Callback::new(
+                "Please input a valid address",
+                &|value: &FormValue| -> bool {
+                    if let FormValue::String(address) = value {
+                        SocketAddr::from_str(address).is_ok()
+                    } else {
+                        false
+                    }
+                },
+            )],
+            ..Default::default()
+        },
+    );
+    address_field.set_input_buffer(&format!("127.0.0.1:{}", accord::DEFAULT_PORT));
+
+    login_form.add_field("address", address_field);
 
     login_form.build_field::<forms::Text>(
         "username",
@@ -139,15 +142,13 @@ async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, 
     );
     login_form.set_active(true);
     let mut login_x = (console.get_width() as i32 - login_width as i32) / 2;
-    let mut login_y = (console.get_height() as i32 - 7) / 2;
-
-    let mut logged_in = false;
+    let mut login_y = (console.get_height() as i32 - 9) / 2;
 
     //==================================
     //      Get credentials
     //==================================
 
-    'login: while !logged_in {
+    'login: loop {
         while !login_form.is_finished() {
             match console.poll() {
                 // exit with escape
@@ -169,9 +170,9 @@ async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, 
                     console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
                     console.check_resize();
                     login_width = std::cmp::max(console.get_width() / 6, 20);
-                    login_form.resize(login_width, 6);
+                    login_form.resize(login_width, 8);
                     login_x = (console.get_width() as i32 - login_width as i32) / 2;
-                    login_y = (console.get_height() as i32 - 7) / 2;
+                    login_y = (console.get_height() as i32 - 9) / 2;
                 }
                 // other events are passed to the form
                 event => login_form.handle_event(event),
@@ -183,22 +184,44 @@ async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, 
             );
             console.draw();
         }
-        if let (Ok(FormValue::String(username)), Ok(FormValue::String(password))) = (
-            login_form.get_validated_field_output("username"),
-            login_form.get_validated_field_output("password"),
-        ) {
-            if let Err(error) = client.login(username, password).await {
-                console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
-                console.print_fbg(0, 0, &error.to_string(), Color::Red, THEME_BG);
-                console.draw();
-                login_form.reset();
-                login_form.set_active(true);
-            } else {
-                logged_in = true;
+        if login_form.is_valid() {
+            if let Ok(FormValue::String(address)) = login_form.get_validated_field_output("address")
+            {
+                let addr = SocketAddr::from_str(&address)?;
+
+                match Client::init(addr).await {
+                    Ok(mut client) => {
+                        if let (Ok(FormValue::String(username)), Ok(FormValue::String(password))) = (
+                            login_form.get_validated_field_output("username"),
+                            login_form.get_validated_field_output("password"),
+                        ) {
+                            if let Err(error) = client.login(username, password).await {
+                                console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
+                                console.print_fbg(0, 0, &error.to_string(), Color::Red, THEME_BG);
+                                console.draw();
+                                login_form.reset();
+                                login_form.set_active(true);
+                            } else {
+                                return Ok(client);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
+                        console.print_fbg(0, 0, &format!("{:?}", error), Color::Red, THEME_BG);
+                        login_form.reset();
+                    }
+                }
             }
         } else {
             console.fill(pixel::pxl_fbg(' ', THEME_FG, THEME_BG));
             let mut pos = 0;
+            if let Some(messages) = login_form.validate_field("address") {
+                for message in messages.iter() {
+                    console.print_fbg(0, pos, message, Color::Red, THEME_BG);
+                    pos += 1;
+                }
+            }
             if let Some(messages) = login_form.validate_field("username") {
                 for message in messages.iter() {
                     console.print_fbg(0, pos, message, Color::Red, THEME_BG);
@@ -214,11 +237,7 @@ async fn login(console: &mut ConsoleEngine, addr: SocketAddr) -> Result<Client, 
             login_form.reset();
         }
     }
-    if !login_form.is_finished() {
-        Err("User cancelled login")?;
-    }
-
-    Ok(client)
+    Err("User cancelled login")?
 }
 
 async fn console_loop(
