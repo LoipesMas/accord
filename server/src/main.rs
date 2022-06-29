@@ -115,6 +115,12 @@ async fn main() {
                     }
                 }
             } else {
+                #[cfg(unix)]
+                tokio::spawn(async move {
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap().recv().await;
+                    std::process::exit(0);
+                });
+
                 loop {
                     let (socket, addr) = listener.accept().await.unwrap();
                     ConnectionWrapper::spawn(socket, addr, ctx.clone()).await;
