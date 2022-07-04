@@ -52,8 +52,18 @@ GUI client can automatically try to load an image from a message with a link, ho
   - druid
 
 ## Setting up accord server
-1. Obtain `accord-server` binary.  
-Currently only method is to compile it yourself.
+
+### Using docker container
+1. Clone docker compose repo
+```
+git clone https://github.com/LoipesMas/accord-docker.git
+cd accord-docker
+```
+2. Edit `config.toml` (you probably only want to change operators)
+3. `docker compose up -d` to run the server in the background
+
+### From source
+1. Compile accord-server
 ```
 git clone https://github.com/LoipesMas/accord.git
 cd accord
