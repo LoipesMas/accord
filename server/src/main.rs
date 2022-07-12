@@ -72,7 +72,7 @@ async fn main() {
     let config = accord_server::config::load_config();
 
     let port = config.port.unwrap_or(accord::DEFAULT_PORT);
-    let listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+    let listener = match TcpListener::bind(("0.0.0.0", port)).await {
         Ok(listener) => listener,
         Err(e) => {
             log::error!("Failed to bind to port {}. Error: {}", port, e);
