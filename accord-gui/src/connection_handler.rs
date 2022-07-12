@@ -28,6 +28,7 @@ pub enum GuiCommand {
     ConnectionEnded(String),
     SendImage(Arc<Vec<u8>>),
     StoreImage(String, Arc<Vec<u8>>),
+    UpdateUserList(Vec<String>),
 }
 
 #[derive(Debug)]
@@ -252,6 +253,7 @@ impl ConnectionHandler {
         mut nonce_generator: Option<ChaCha20Rng>,
         event_sink: &ExtEventSink,
     ) {
+        let mut user_list = vec![];
         'l: loop {
             match reader.read_packet(&secret, nonce_generator.as_mut()).await {
                 Ok(Some(ClientboundPacket::Message(Message {
@@ -273,35 +275,19 @@ impl ConnectionHandler {
                     );
                 }
                 Ok(Some(ClientboundPacket::UserJoined(username))) => {
-                    submit_command(
-                        event_sink,
-                        GuiCommand::AddMessage(GMessage::just_content(format!(
-                            "{} joined the channel.",
-                            username
-                        ))),
-                    );
+                    user_list.push(username);
+                    submit_command(event_sink, GuiCommand::UpdateUserList(user_list.clone()));
                 }
                 Ok(Some(ClientboundPacket::UserLeft(username))) => {
-                    submit_command(
-                        event_sink,
-                        GuiCommand::AddMessage(GMessage::just_content(format!(
-                            "{} left the channel.",
-                            username
-                        ))),
-                    );
+                    user_list
+                        .iter()
+                        .position(|u| *u == username)
+                        .map(|p| user_list.remove(p));
+                    submit_command(event_sink, GuiCommand::UpdateUserList(user_list.clone()));
                 }
                 Ok(Some(ClientboundPacket::UsersOnline(usernames))) => {
-                    let mut s = String::new();
-                    s += "-------------\n";
-                    s += "Users online:\n";
-                    for username in &usernames {
-                        s += &format!("  {}\n", username);
-                    }
-                    s += "-------------";
-                    submit_command(
-                        event_sink,
-                        GuiCommand::AddMessage(GMessage::just_content(s)),
-                    );
+                    user_list = usernames;
+                    submit_command(event_sink, GuiCommand::UpdateUserList(user_list.clone()));
                 }
                 Ok(Some(ClientboundPacket::ImageMessage(im))) => {
                     use sha2::{Digest, Sha256};

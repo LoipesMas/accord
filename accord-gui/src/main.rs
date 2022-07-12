@@ -92,6 +92,7 @@ struct AppState {
     remember_login: bool,
     input_text4: Arc<String>,
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
+    user_list: Vector<String>,
     messages: Vector<Message>,
     images_from_links: bool,
 }
@@ -132,6 +133,7 @@ fn main() {
         remember_login: config.remember_login,
         input_text4: Arc::new("".to_string()),
         connection_handler_tx: Arc::new(tx),
+        user_list: Vector::new(),
         messages: Vector::new(),
         images_from_links: config.images_from_links,
     };
@@ -324,6 +326,14 @@ fn try_parse_addr(s: &str) -> String {
 }
 
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
+    let theme = unsafe {
+        // We only read
+        THEME.as_ref().unwrap()
+    };
+    let user_list_font = FontDescriptor::new(FontFamily::SYSTEM_UI)
+        .with_size(15.0)
+        .with_weight(druid::FontWeight::BOLD);
+
     let info_label = Label::dynamic(|data, _env| format!("{}", data))
         .with_text_color(Color::YELLOW)
         .lens(AppState::info_label_text);
@@ -338,39 +348,55 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
     };
     let accord_logo = Svg::new(accord_logo_data).fill_mode(druid::widget::FillStrat::ScaleDown);
 
+    let user_list_widget = Flex::column()
+        .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
+        .with_flex_child(
+            List::new(move || Label::raw().with_font(user_list_font.clone()))
+                .lens(AppState::user_list),
+            1.0,
+        )
+        .with_child(Label::new("").fix_width(100.0))
+        .expand_height()
+        .padding((10.0, 5.0, 5.0, 5.0))
+        .cut_corners(10.0, 0.0, 0.0, 10.0)
+        .with_border(unwrap_from_hex(&theme.highlight), theme.border)
+        .with_background(unwrap_from_hex(&theme.color1))
+        .padding((0.0, 0.0, 5.0, 0.0));
+
+    let messages_list_widget = List::new(move || message(Arc::clone(&dled_images)))
+        .controller(ListController)
+        .scroll()
+        .vertical()
+        .controller(ScrollController::new())
+        .expand_height()
+        .lens(AppState::messages);
+
+    let input_text_box = TextBox::multiline()
+        .lens(AppState::input_text4)
+        .expand_width()
+        .controller(TakeFocusMain)
+        .controller(MessageTextBoxController);
+
+    let send_button =
+        Button::new("Send").on_click(|_ctx, data: &mut AppState, _env| send_message_click(data));
+
     Flex::column()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
         .with_child(accord_logo.fix_height(80.0).center())
         .with_child(info_label)
         .with_flex_child(
-            List::new(move || {
-                let dled_images_2 = Arc::clone(&dled_images);
-                message(dled_images_2)
-            })
-            .controller(ListController)
-            .scroll()
-            .vertical()
-            .controller(ScrollController::new())
-            .expand_height()
-            .lens(AppState::messages),
+            Flex::row()
+                .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
+                .with_child(user_list_widget)
+                .with_flex_child(messages_list_widget, 1.0),
             1.0,
         )
         .with_default_spacer()
         .with_child(
             Flex::row()
-                .with_flex_child(
-                    TextBox::multiline()
-                        .lens(AppState::input_text4)
-                        .expand_width()
-                        .controller(TakeFocusMain)
-                        .controller(MessageTextBoxController),
-                    1.0,
-                )
+                .with_flex_child(input_text_box, 1.0)
                 .with_default_spacer()
-                .with_child(
-                    Button::new("Send")
-                        .on_click(|_ctx, data: &mut AppState, _env| send_message_click(data)),
-                ),
+                .with_child(send_button),
         )
         .padding(20.0)
 }
@@ -386,7 +412,7 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
                 |data: &AppState, _env| data.current_view,
                 move |selector, _data, _env| match *selector {
                     Views::Connect => Box::new(connect_view()),
-                    _ => Box::new(main_view(Arc::clone(&dled_images))),
+                    Views::Main => Box::new(main_view(Arc::clone(&dled_images))),
                 },
             ),
             1.0,
@@ -468,9 +494,6 @@ impl druid::AppDelegate<AppState> for Delegate {
                     data.messages.push_back(m.clone());
 
                     // Try to get image from message link
-                    //
-                    // Note: Now that I think about it, this could be a pretty big vulnerability.
-                    //  Maybe a better solution would be hosting images on the server?
                     if data.images_from_links {
                         let dled_images = Arc::clone(&self.dled_images);
                         let link = m.content.clone();
@@ -505,6 +528,7 @@ impl druid::AppDelegate<AppState> for Delegate {
                         druid::Selector::<String>::new("image_downloaded").with(hash.to_string()),
                     );
                 }
+                GuiCommand::UpdateUserList(user_list) => data.user_list = user_list.into(),
             };
         };
         druid::Handled::No

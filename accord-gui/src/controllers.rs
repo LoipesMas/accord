@@ -19,6 +19,7 @@ pub struct ImageFromLink {
     placeholder: WidgetPod<Message, Box<dyn Widget<Message>>>,
     image: Option<WidgetPod<Message, Box<dyn Widget<Message>>>>,
 }
+
 impl ImageFromLink {
     pub fn new(
         placeholder: impl Widget<Message> + 'static,
