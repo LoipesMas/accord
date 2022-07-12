@@ -219,4 +219,23 @@ mod test {
                 .0
         );
     }
+
+    #[test]
+    fn encrypt_and_decrypt_packet_test() {
+        let key = [0u8; SECRET_LEN];
+        let nonce = [0u8; NONCE_LEN];
+
+        let packet = ServerboundPacket::Message("test".to_string());
+
+        let packet_data = packet.serialized();
+        let encrypted = encrypt_frame(&packet_data, &key, &nonce);
+
+        let decrypted = decrypt_frame(&mut &encrypted[..], &key, &nonce);
+        assert_eq!(
+            packet,
+            ServerboundPacket::deserialized(&decrypted.unwrap().0)
+                .unwrap()
+                .0
+        );
+    }
 }
