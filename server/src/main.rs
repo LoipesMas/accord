@@ -117,7 +117,10 @@ async fn main() {
             } else {
                 #[cfg(unix)]
                 tokio::spawn(async move {
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap().recv().await;
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .unwrap()
+                        .recv()
+                        .await;
                     std::process::exit(0);
                 });
 

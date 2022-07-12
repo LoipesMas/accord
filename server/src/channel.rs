@@ -506,7 +506,8 @@ impl AccordChannel {
 
     /// Whitelists (or unwhitelists) a user
     async fn whitelist_user(&self, username: &str, switch: bool) {
-        let n = self.db_client
+        let n = self
+            .db_client
             .execute(
                 "UPDATE accord.accounts SET whitelisted = $1 WHERE username = $2",
                 &[&switch, &username],
@@ -515,8 +516,7 @@ impl AccordChannel {
             .unwrap();
         if n == 0 {
             log::warn!("User {} not in database!", &username);
-        }
-        else if switch {
+        } else if switch {
             log::info!("Whitelisted user {}", username);
         } else {
             log::info!("Unwhitelisted user {}", username);
