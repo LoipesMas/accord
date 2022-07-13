@@ -13,14 +13,17 @@ const LIST_CHANGED: Selector<Size> = Selector::new("list-changed");
 
 pub const SCROLL: Selector<f64> = Selector::new("scroll");
 
-// "Heavily inspired" by RemoteImage from jpochyla's psst ;]
-pub struct ImageFromLink {
+/// Widget that contains a dynamically loaded image
+///
+/// "Heavily inspired" by RemoteImage from jpochyla's psst ;]
+pub struct ImageMessage {
     pub dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
     placeholder: WidgetPod<Message, Box<dyn Widget<Message>>>,
     image: Option<WidgetPod<Message, Box<dyn Widget<Message>>>>,
 }
 
-impl ImageFromLink {
+impl ImageMessage {
+    /// Creates new `ImageMessage`
     pub fn new(
         placeholder: impl Widget<Message> + 'static,
         dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
@@ -32,8 +35,9 @@ impl ImageFromLink {
         }
     }
 
-    fn try_get_image(&mut self, link: &str) -> bool {
-        if let Some(ib) = self.dled_images.lock().unwrap().get(link) {
+    /// Tries to get relevant image from cache
+    fn try_get_image(&mut self, id: &str) -> bool {
+        if let Some(ib) = self.dled_images.lock().unwrap().get(id) {
             self.image.replace(
                 WidgetPod::new(
                     Image::new(ib.clone())
@@ -51,8 +55,9 @@ impl ImageFromLink {
     }
 }
 
-impl Widget<Message> for ImageFromLink {
+impl Widget<Message> for ImageMessage {
     fn event(&mut self, ctx: &mut druid::EventCtx, event: &Event, data: &mut Message, env: &Env) {
+        // Update Image if our image was downloaded
         if let Event::Command(cmd) = event {
             if let Some(link_c) = cmd.get(Selector::<String>::new("image_downloaded")) {
                 let link = &data.content;
@@ -76,6 +81,7 @@ impl Widget<Message> for ImageFromLink {
         data: &Message,
         env: &Env,
     ) {
+        // Try to load image on creation
         if let druid::LifeCycle::WidgetAdded = event {
             if self.try_get_image(&data.content) {
                 ctx.children_changed();
@@ -94,8 +100,7 @@ impl Widget<Message> for ImageFromLink {
         data: &Message,
         env: &Env,
     ) {
-        // if we ever add message editing, we need to update this!
-        //
+        // If we ever add message editing, we need to update this!
         if let Some(image) = self.image.as_mut() {
             image.update(ctx, data, env);
         } else {
@@ -131,6 +136,7 @@ impl Widget<Message> for ImageFromLink {
     }
 }
 
+/// Controller to automatically scroll when new messages are added
 pub struct ScrollController {
     prev_child_size: Option<Size>,
     widget_added_time: std::time::Instant,
@@ -165,7 +171,7 @@ where
                         (prev_size.height - (child.offset().y + ctx.size().height)).abs() < 50.0;
                 }
 
-                // To make sure it gets scrolled to the bottom at startup
+                // HACK: To make sure it gets scrolled to the bottom at startup
                 if self.widget_added_time.elapsed().as_secs() < 3 {
                     should_scroll = true;
                 }
@@ -204,6 +210,7 @@ where
     }
 }
 
+/// Controller to send command when list's size changes
 pub struct ListController;
 
 impl Controller<Vector<Message>, druid::widget::List<Message>> for ListController {
@@ -222,6 +229,7 @@ impl Controller<Vector<Message>, druid::widget::List<Message>> for ListControlle
     }
 }
 
+/// Take focus on connect screen
 pub struct TakeFocusConnect;
 
 impl<T, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
@@ -237,6 +245,7 @@ impl<T, W: Widget<T>> Controller<T, W> for TakeFocusConnect {
     }
 }
 
+/// Take focus on main screen
 pub struct TakeFocusMain;
 
 impl<T, W: Widget<T>> Controller<T, W> for TakeFocusMain {
@@ -250,6 +259,8 @@ impl<T, W: Widget<T>> Controller<T, W> for TakeFocusMain {
     }
 }
 
+/// Controller for message TextBox.
+/// Handles pasting.
 pub struct MessageTextBoxController;
 
 impl<T, W: Widget<T>> Controller<T, W> for MessageTextBoxController {

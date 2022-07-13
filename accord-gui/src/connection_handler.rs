@@ -21,25 +21,41 @@ use crate::Message as GMessage;
 
 use log::{error, info};
 
+/// Commands sent to GUI
 #[derive(Debug)]
 pub enum GuiCommand {
+    /// Add message to message list
     AddMessage(GMessage),
+    /// Connected to server
     Connected,
+    /// Connection ended with reason as `String`
     ConnectionEnded(String),
+    /// Send image stored in bytes
+    ///
+    /// Used on pasting image to textbox
     SendImage(Arc<Vec<u8>>),
+    /// Store image in cache, identifed by the String (usually a hash of the image)
     StoreImage(String, Arc<Vec<u8>>),
+    /// Set the list of connected users
     UpdateUserList(Vec<String>),
 }
 
+/// Commands sent to ConnectionHandler (from GUI)
 #[derive(Debug)]
 pub enum ConnectionHandlerCommand {
+    /// Connects with `(address, username, password)`
     Connect(String, String, String),
+    /// Sends this packet to server
     Write(accord::packets::ServerboundPacket),
 }
 
+/// Handles connection to the server.
+/// Communicates with GUI with [`GuiCommand`]s and [`ConnectionHandlerCommand`]s.
 pub struct ConnectionHandler;
 
 impl ConnectionHandler {
+    /// Awaits [`ConnectionHandlerCommand::Connect`] from GUI
+    /// and then connects to the server.
     pub fn main_loop(
         self,
         mut rx: mpsc::Receiver<ConnectionHandlerCommand>,
@@ -60,6 +76,9 @@ impl ConnectionHandler {
             }
         });
     }
+
+    /// Connects to the server, establishes encryption, logs in
+    /// and spawns reading and writing loops.
     pub async fn connect(
         &self,
         gui_rx: &mut mpsc::Receiver<ConnectionHandlerCommand>,
@@ -69,7 +88,7 @@ impl ConnectionHandler {
         event_sink: &ExtEventSink,
     ) {
         //==================================
-        //      Parse args
+        //      Connect
         //==================================
         info!("Connecting to: {}", addr);
         let socket = if let Ok(Ok(socket)) =
@@ -246,6 +265,7 @@ impl ConnectionHandler {
         );
     }
 
+    /// Reads incoming packets, processes them and sends commands to GUI
     async fn reading_loop(
         mut reader: ConnectionReader<ClientboundPacket>,
         close_sender: oneshot::Sender<()>,
@@ -330,6 +350,7 @@ impl ConnectionHandler {
         }
     }
 
+    /// Writes packets, coming from GUI, to server connection
     async fn writing_loop(
         mut writer: ConnectionWriter<ServerboundPacket>,
         mut close_receiver: oneshot::Receiver<()>,
@@ -359,6 +380,7 @@ impl ConnectionHandler {
     }
 }
 
+/// Helper function to submit a GUI command
 fn submit_command(event_sink: &ExtEventSink, info: GuiCommand) {
     event_sink
         .submit_command(crate::GUI_COMMAND, info, druid::Target::Global)

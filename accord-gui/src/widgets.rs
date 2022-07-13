@@ -3,6 +3,7 @@ use druid::{
     Color, Data, Env, KeyOrValue, PaintCtx, Point, Rect, RenderContext, Size, Widget, WidgetPod,
 };
 
+/// Extension on [`Widget`] to add helper functions for cut corners
 pub trait WidgetExt2<T: Data>: Widget<T> + Sized + 'static {
     fn cut_corners(
         self,
@@ -32,6 +33,7 @@ struct BorderStyle {
     color: KeyOrValue<Color>,
 }
 
+/// Wrapper [`Widget`] that cuts off corners
 pub struct CutCorners<T> {
     bottom_left_offset: f64,
     bottom_right_offset: f64,
@@ -61,7 +63,6 @@ impl<T> CutCorners<T> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn new_sym(offset: f64, inner: impl Widget<T> + 'static) -> Self {
         Self {
             bottom_left_offset: offset,

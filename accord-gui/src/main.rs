@@ -55,6 +55,7 @@ impl Default for Theme {
     }
 }
 
+/// Represents a message on the server
 #[derive(Debug, Data, Lens, Clone, PartialEq, Eq)]
 pub struct Message {
     pub sender_id: i64,
@@ -64,21 +65,12 @@ pub struct Message {
     pub is_image: bool,
 }
 
-impl Message {
-    pub fn just_content(content: String) -> Self {
-        Self {
-            sender_id: 0,
-            sender: String::new(),
-            date: String::new(),
-            content,
-            is_image: false,
-        }
-    }
-}
-
+/// Views in accord-gui application
 #[derive(Debug, Data, Clone, Copy, PartialEq, Eq)]
 enum Views {
+    /// Starting view. Login prompt
     Connect,
+    /// Main view, with messages etc.
     Main,
 }
 
@@ -91,8 +83,11 @@ struct AppState {
     input_text3: Arc<String>,
     remember_login: bool,
     input_text4: Arc<String>,
+    /// For sending commands to [`ConnectionHandler`]
     connection_handler_tx: Arc<mpsc::Sender<ConnectionHandlerCommand>>,
+    /// List of connected users
     user_list: Vector<String>,
+    /// Cached messages
     messages: Vector<Message>,
     images_from_links: bool,
 }
@@ -105,7 +100,7 @@ fn init_logger() {
 }
 
 // This could be not static, but oh well
-// Maybe this should be just set in Env?
+// TODO: Maybe this should be just set in Env?
 static mut THEME: Option<Theme> = None;
 
 pub const GUI_COMMAND: druid::Selector<GuiCommand> = druid::Selector::new("gui_command");
@@ -122,8 +117,12 @@ fn main() {
 
     let connection_handler = ConnectionHandler {};
     let (tx, rx) = mpsc::channel(16);
+
+    // Cache of images
     let dled_images = Arc::new(Mutex::new(HashMap::new()));
+
     let main_window = WindowDesc::new(ui_builder(Arc::clone(&dled_images))).title("accord");
+
     let data = AppState {
         current_view: Views::Connect,
         info_label_text: Arc::new("".to_string()),
@@ -137,6 +136,7 @@ fn main() {
         messages: Vector::new(),
         images_from_links: config.images_from_links,
     };
+
     let launcher = AppLauncher::with_window(main_window).delegate(Delegate {
         dled_images,
         rt: tokio::runtime::Runtime::new().unwrap(),
@@ -151,6 +151,7 @@ fn main() {
     launcher.launch(data).unwrap();
 }
 
+/// Connect to server using data from input textboxes
 fn connect_click(data: &mut AppState) {
     let addr = try_parse_addr(&data.input_text1);
     if accord::utils::verify_username(&*data.input_text2) {
@@ -169,6 +170,7 @@ fn connect_click(data: &mut AppState) {
     };
 }
 
+/// Send message to server
 fn send_message_click(data: &mut AppState) {
     let s = data.input_text4.clone();
     if accord::utils::verify_message(&*s) {
@@ -191,6 +193,7 @@ fn unwrap_from_hex(s: &str) -> Color {
     Color::from_hex_str(s).unwrap()
 }
 
+/// Builds UI of connect view
 fn connect_view() -> impl Widget<AppState> {
     let font = FontDescriptor::new(FontFamily::SYSTEM_UI).with_size(20.0);
     let theme = unsafe {
@@ -282,6 +285,7 @@ fn connect_view() -> impl Widget<AppState> {
         .align_vertical(UnitPoint::new(0.0, 0.25))
 }
 
+/// Builds a [`Widget`] showing a message
 fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Message> {
     let theme = unsafe {
         // We only read
@@ -294,7 +298,7 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
         .with_text_color(unwrap_from_hex(&theme.text_color1))
         .with_line_break_mode(druid::widget::LineBreaking::WordWrap)
         .lens(Message::content);
-    let image_from_link = ImageFromLink::new(content_label, dled_images);
+    let image_from_link = ImageMessage::new(content_label, dled_images);
     Flex::row()
         .cross_axis_alignment(druid::widget::CrossAxisAlignment::Start)
         .with_child(
@@ -317,6 +321,9 @@ fn message(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<Me
         .padding(Insets::uniform_xy(0.0, 1.0))
 }
 
+/// Parses address from string.
+/// If string contains `':'`, it assumes it's "ADDRESS:PORT",
+/// else it assumes it's just the address.
 fn try_parse_addr(s: &str) -> String {
     if s.contains(':') {
         s.to_owned()
@@ -325,6 +332,7 @@ fn try_parse_addr(s: &str) -> String {
     }
 }
 
+/// Builds UI of main view
 fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
     let theme = unsafe {
         // We only read
@@ -401,6 +409,7 @@ fn main_view(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<
         .padding(20.0)
 }
 
+/// Builds root widget
 fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget<AppState> {
     let theme = unsafe {
         // We only read
@@ -427,11 +436,13 @@ fn ui_builder(dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>) -> impl Widget
         ))
 }
 
+/// Main delegate for this app
 struct Delegate {
     dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,
     rt: tokio::runtime::Runtime,
 }
 
+/// Construct [`Config`] from [`AppState`]
 fn config_from_appstate(data: &AppState) -> Config {
     let (address, username) = if data.remember_login {
         (data.input_text1.to_string(), data.input_text2.to_string())
@@ -535,6 +546,9 @@ impl druid::AppDelegate<AppState> for Delegate {
     }
 }
 
+/// Tries to download and image from the link and stores it in `dled_images` cache.
+///
+/// Returns `true` on success.
 async fn try_get_image_from_link(
     link: &str,
     dled_images: Arc<Mutex<HashMap<String, ImageBuf>>>,

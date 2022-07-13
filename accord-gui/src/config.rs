@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Represents config file loaded into memory
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub address: String,
@@ -45,14 +46,16 @@ fn config_path_dir() -> PathBuf {
     path
 }
 
+/// Saves config.
+/// If [`Config::theme`] is `None`, it loads it from saved config.
 pub fn save_config(mut config: Config) -> std::io::Result<()> {
     log::info!("Saving config.");
     let config_path = config_path();
     std::fs::create_dir_all(config_path_dir()).unwrap();
 
     if config.theme.is_none() {
-        // This _shouldn't_ create an infinite loop, because theme shouldn't be None when saving
-        // new config
+        // This _shouldn't_ create an infinite loop, because if `load_config` doesn't load a theme,
+        // it uses default
         config.theme = load_config().theme;
     }
 
