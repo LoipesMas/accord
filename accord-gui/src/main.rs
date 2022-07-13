@@ -42,8 +42,8 @@ pub struct Theme {
     pub border: f64,
 }
 
-impl Theme {
-    pub fn default() -> Self {
+impl Default for Theme {
+    fn default() -> Self {
         Self {
             background1: "#200730".to_string(),
             background2: "#030009".to_string(),

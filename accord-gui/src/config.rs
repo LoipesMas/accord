@@ -17,13 +17,14 @@ impl Default for Config {
             address: Default::default(),
             username: Default::default(),
             remember_login: true,
-            theme: Some(crate::Theme::default()),
             images_from_links: false,
+            theme: Some(Default::default()),
         }
     }
 }
 
 const CONFIG_FILE: &str = "config.toml";
+
 fn config_path() -> PathBuf {
     let mut path = config_path_dir();
     path.push(CONFIG_FILE);
@@ -63,12 +64,22 @@ pub fn load_config() -> Config {
     log::info!("Loading config.");
     let config_path = config_path();
     let toml = std::fs::read_to_string(config_path);
-    let config = if let Ok(toml) = toml {
-        toml::from_str(&toml).unwrap()
+    let mut config = if let Ok(toml) = toml {
+        match toml::from_str(&toml) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("Failed to parse config: {e}.");
+                std::process::exit(-1)
+            }
+        }
     } else {
         log::info!("Failed to load config, using default and saving default.");
         save_config(Config::default()).unwrap();
         Config::default()
     };
+    if config.theme.is_none() {
+        log::warn!("No `theme` field in config! Using default.");
+        config.theme = Some(Default::default());
+    }
     config
 }
