@@ -1,6 +1,7 @@
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 
+/// A text message
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct Message {
     pub sender_id: i64,
@@ -9,6 +10,7 @@ pub struct Message {
     pub time: u64,
 }
 
+/// A message with an image
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct ImageMessage {
     pub sender_id: i64,
@@ -24,6 +26,7 @@ pub trait Packet {
         Self: std::marker::Sized;
 }
 
+/// Packets going from client to the server.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ServerboundPacket {
     Ping,
@@ -49,6 +52,7 @@ impl Packet for ServerboundPacket {
     }
 }
 
+/// Packets going from the server to client.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ClientboundPacket {
     Pong,

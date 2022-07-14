@@ -12,19 +12,23 @@ use rand_chacha::ChaCha20Rng;
 
 use encryption::*;
 
-// I = Incoming Packets
-// O = Outgoing Packets
+/// Connection that is later split into separate reader and writer.
+///
+/// I = Incoming Packets
+/// O = Outgoing Packets
 pub struct Connection<I, O> {
     stream: TcpStream,
     _marker: PhantomData<(I, O)>,
 }
 
+/// Reading half of the connection.
 pub struct ConnectionReader<P: Packet> {
     stream: OwnedReadHalf,
     buffer: BytesMut,
     _marker: PhantomData<P>,
 }
 
+/// Writing half of the connection.
 pub struct ConnectionWriter<P: Packet> {
     stream: BufWriter<OwnedWriteHalf>,
     _marker: PhantomData<P>,
@@ -35,6 +39,7 @@ where
     I: Packet,
     O: Packet,
 {
+    /// New connection over TCP stream.
     pub fn new(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -42,7 +47,7 @@ where
         }
     }
 
-    /// Splits stream to separate handles so they can be used in different tasks
+    /// Splits stream to separate handles so they can be used in separate threads.
     pub fn split(self) -> (ConnectionReader<I>, ConnectionWriter<O>) {
         let (read, write) = self.stream.into_split();
         let read = ConnectionReader::<I> {
@@ -59,24 +64,28 @@ where
 }
 
 impl<P: Packet> ConnectionReader<P> {
+    /// Tries to read incoming packet on TCP stream
+    /// and decrypts if secret and nonce_generator are `Some`
     pub async fn read_packet(
         &mut self,
         secret: &Option<Vec<u8>>,
         nonce_generator: Option<&mut ChaCha20Rng>,
     ) -> Result<Option<P>, String> {
-        let (secret, nonce) = if let Some(secret) = secret {
+        let secret_and_nonce = if let Some(secret) = secret {
             let mut buf = [0u8; crate::SECRET_LEN];
             buf.copy_from_slice(&secret[..]);
             let mut nonce = [0u8; crate::NONCE_LEN];
-            nonce_generator.unwrap().fill_bytes(&mut nonce);
-            (Some(buf), Some(nonce))
+            nonce_generator
+                .expect("Expected `nonce_generator` to be `Some` because `secret` was `Some`.")
+                .fill_bytes(&mut nonce);
+            Some((buf, nonce))
         } else {
-            (None, None)
+            None
         };
         loop {
-            if let Some(secret) = secret {
+            if let Some((secret, nonce)) = secret_and_nonce {
                 if let Ok((p, b)) =
-                    decrypt_frame(&mut self.buffer.as_ref(), &secret, &nonce.unwrap())
+                    decrypt_frame(&mut self.buffer.as_ref(), &secret, &nonce)
                 {
                     self.buffer = BytesMut::from(b);
                     if let Ok((p, _)) = P::deserialized(&p) {
@@ -102,24 +111,28 @@ impl<P: Packet> ConnectionReader<P> {
 }
 
 impl<P: Packet> ConnectionWriter<P> {
+    /// Tries to write the packet to TCP stream
+    /// and encrypts it if secret and nonce_generator are `Some`
     pub async fn write_packet(
         &mut self,
         packet: P,
         secret: &Option<Vec<u8>>,
         nonce_generator: Option<&mut ChaCha20Rng>,
     ) -> std::io::Result<()> {
-        let (secret, nonce) = if let Some(secret) = secret {
+        let secret_and_nonce = if let Some(secret) = secret {
             let mut buf = [0u8; crate::SECRET_LEN];
             buf.copy_from_slice(&secret[..]);
             let mut nonce = [0u8; crate::NONCE_LEN];
-            nonce_generator.unwrap().fill_bytes(&mut nonce);
-            (Some(buf), Some(nonce))
+            nonce_generator
+                .expect("Expected `nonce_generator` to be `Some` because `secret` was `Some`.")
+                .fill_bytes(&mut nonce);
+            Some((buf, nonce))
         } else {
-            (None, None)
+            None
         };
         let mut p = packet.serialized();
-        if let Some(secret) = secret {
-            p = encrypt_frame(&p, &secret, &nonce.unwrap());
+        if let Some((secret, nonce)) = secret_and_nonce {
+            p = encrypt_frame(&p, &secret, &nonce);
         }
         self.stream.write_all(&p).await?;
         self.stream.flush().await
@@ -134,13 +147,15 @@ mod encryption {
 
     use crate::{NONCE_LEN, SECRET_LEN};
 
-    // [u8; n] -> [u8;n+4] (1st 4 bytes is len)
+    /// Encrypts the packet using [`XChaCha20Poly1305`].
+    ///
+    /// [u8; n] -> [u8;n+4] (1st 4 bytes is len)
     pub fn encrypt_frame(
         packet_bytes: &[u8],
         key: &[u8; SECRET_LEN],
         nonce: &[u8; NONCE_LEN],
     ) -> Vec<u8> {
-        // This could some unsafe pointer magic to be more optimal
+        // This maybe could use some unsafe pointer magic to be more optimal?
         let cipher = XChaCha20Poly1305::new(key.into());
         let len: u32 = packet_bytes.len().try_into().expect("Packet too big!");
         let mut buf = vec![0; len as usize + 4];
@@ -154,6 +169,9 @@ mod encryption {
         ret
     }
 
+    /// Decrypts the packet using [`XChaCha20Poly1305`].
+    ///
+    /// [u8; n] -> [u8;n+4] (1st 4 bytes is len)
     pub fn decrypt_frame<'a>(
         encrypted_bytes: &mut &'a [u8],
         key: &[u8; SECRET_LEN],
@@ -162,19 +180,21 @@ mod encryption {
         if encrypted_bytes.len() < 4 {
             return Err("Too short".to_string());
         }
-        // This could use some unsafe pointer magic to be more optimal
-        let cipher = XChaCha20Poly1305::new(key.into());
 
         let data_len: u32 = super::read_be_u32(encrypted_bytes);
         if data_len as usize > encrypted_bytes.len() {
             return Err("Not full frame".to_string());
         }
+
+        // This maybe could use some unsafe pointer magic to be more optimal?
+        let cipher = XChaCha20Poly1305::new(key.into());
         let (packet_bytes, rest) = encrypted_bytes.split_at(data_len as usize);
         let ret = cipher.decrypt(nonce.into(), packet_bytes).unwrap();
         Ok((ret, rest))
     }
 }
 
+/// Reads big endian u32 from bytes, advancing input head by the size of u32
 fn read_be_u32(input: &mut &[u8]) -> u32 {
     let (int_bytes, rest) = input.split_at(std::mem::size_of::<u32>());
     *input = rest;
