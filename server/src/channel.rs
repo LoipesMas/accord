@@ -20,6 +20,7 @@ use rsa::{pkcs8::ToPublicKey, PaddingScheme, RsaPrivateKey, RsaPublicKey};
 
 use anyhow::{Context, Result};
 
+/// Channel represents the server that the users connect to and send messages to.
 pub struct AccordChannel {
     receiver: Receiver<ChannelCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>>,
@@ -32,6 +33,8 @@ pub struct AccordChannel {
 }
 
 impl AccordChannel {
+    /// Generates private key, connects to the databse, sets up the database if needed,
+    /// and spawns the channel loop.
     pub async fn spawn(receiver: Receiver<ChannelCommand>, config: Config) -> Result<()> {
         // Setup
         let txs: HashMap<std::net::SocketAddr, Sender<ConnectionCommand>> = HashMap::new();
@@ -120,6 +123,7 @@ impl AccordChannel {
         Ok(())
     }
 
+    /// Waits for [`ChannelCommand`]s on [`AccordChannel::receiver`] and handles them.
     async fn channel_loop(mut self) {
         loop {
             use ChannelCommand::*;
@@ -295,7 +299,7 @@ impl AccordChannel {
         }
     }
 
-    /// Disconnects user from the channel
+    /// Disconnects user from the channel.
     async fn kick_user(&mut self, username: &str) {
         log::info!("Kicked user {}", username);
         for (addr, un) in self.connected_users.iter() {
@@ -310,6 +314,7 @@ impl AccordChannel {
         }
     }
 
+    /// Handles pretty much entire login process.
     async fn handle_login(&mut self, p: ChannelCommand) {
         if let ChannelCommand::LoginAttempt {
             username,
@@ -382,6 +387,7 @@ impl AccordChannel {
         }
     }
 
+    /// Inserts new user into the database.
     async fn insert_user(
         &self,
         username: &str,
@@ -396,6 +402,8 @@ impl AccordChannel {
             .await
             .unwrap()
     }
+
+    /// Gets user from the database by the username.
     async fn get_user(&self, username: &str) -> Option<tokio_postgres::Row> {
         self.db_client
             .query_opt(
@@ -406,6 +414,7 @@ impl AccordChannel {
             .unwrap()
     }
 
+    /// Inserts new text message into the database.
     async fn insert_message(&self, message: &accord::packets::Message) {
         self.db_client
             .execute(
@@ -416,6 +425,7 @@ impl AccordChannel {
             .unwrap();
     }
 
+    /// Inserts new image message into the database.
     async fn insert_image_message(&self, message: &accord::packets::ImageMessage) {
         use sha2::{Digest, Sha256};
         use tokio_postgres::types::private::read_be_i32;
@@ -444,6 +454,7 @@ impl AccordChannel {
             .unwrap();
     }
 
+    /// Gets a range of messages from the database.
     async fn fetch_messages(&self, offset: i64, count: i64) -> Vec<tokio_postgres::Row> {
         self.db_client
             .query(

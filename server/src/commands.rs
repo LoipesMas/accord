@@ -1,9 +1,10 @@
-/// Commands used internally for communication between connections and channel loop
+//! Commands used internally for communication between connections and channel loop
 use accord::packets::*;
 use std::net::SocketAddr;
 
 use tokio::sync::{mpsc::Sender, oneshot::Sender as OSender};
 
+/// Fetched permissions of the user.
 #[derive(Debug, Default)]
 pub struct UserPermissions {
     pub operator: bool,
@@ -11,6 +12,7 @@ pub struct UserPermissions {
     pub banned: bool,
 }
 
+/// Commands sent to client-server connection handlers.
 #[derive(Debug)]
 pub enum ConnectionCommand {
     Write(ClientboundPacket),
@@ -18,6 +20,7 @@ pub enum ConnectionCommand {
     Close,
 }
 
+/// Commands sent to [`AccordChannel`](`crate::channel::AccordChannel`)
 #[derive(Debug)]
 pub enum ChannelCommand {
     Close,

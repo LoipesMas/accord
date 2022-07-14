@@ -8,10 +8,11 @@ use tokio::sync::oneshot;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
-// Maybe this shouldn't be a struct?
-pub struct ConnectionWrapper;
+/// A wrapper for incoming connection to the channel.
+pub struct ConnectionWrapper; // Maybe this shouldn't be a struct?
 
 impl ConnectionWrapper {
+    /// Handles incoming connection and spawns reading and writing loops.
     pub async fn spawn(
         socket: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
@@ -358,6 +359,7 @@ impl ConnectionReaderWrapper {
         };
     }
 
+    /// Listens for incoming packets from user and handles them.
     async fn spawn_loop(mut self) {
         loop {
             match self
@@ -398,6 +400,7 @@ impl ConnectionReaderWrapper {
         }
     }
 
+    /// Gets permissions of user identified by username
     async fn get_perms(
         &mut self,
         username: String,
@@ -410,6 +413,8 @@ impl ConnectionReaderWrapper {
         orx.await
     }
 
+    /// switch == true => ban
+    /// switch == false => unban
     async fn ban_command(&mut self, target: Option<&str>, switch: bool) {
         let m = if let Some(target) = target {
             let perms = self.get_perms(self.username.to_owned().unwrap()).await;
@@ -433,6 +438,8 @@ impl ConnectionReaderWrapper {
         self.respond(m).await;
     }
 
+    /// switch == true => add to whitelist
+    /// switch == false => remove form whitelist
     async fn whitelist_command(&mut self, target: Option<&str>, switch: bool) {
         let m = if let Some(target) = target {
             let perms = self.get_perms(self.username.to_owned().unwrap()).await;
@@ -490,6 +497,7 @@ impl ConnectionWriterWrapper {
         }
     }
 
+    /// Listens for commands and sends packets to user.
     async fn spawn_loop(mut self) {
         loop {
             if let Some(com) = self.connection_receiver.recv().await {

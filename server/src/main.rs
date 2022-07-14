@@ -62,7 +62,7 @@ async fn main() {
     let mut tui_handle = None;
     if tui {
         let (logs_tx, logs_rx) = mpsc::channel(128);
-        let writer = logging::LogVec::new(logs_tx);
+        let writer = logging::LogRouter::new(logs_tx);
         init_logger_tui(Box::new(writer), args.log_to_file);
         tui_handle = Some(tui::Tui::new(logs_rx, ctx.clone()).launch());
     } else {

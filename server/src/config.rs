@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Represents config file loaded into memory
 #[derive(Serialize, Deserialize)]
 pub struct Config {
     pub db_host: String,
@@ -69,7 +70,13 @@ pub fn load_config() -> Config {
     let config_path = config_path();
     let toml = std::fs::read_to_string(config_path);
     let config = if let Ok(toml) = toml {
-        toml::from_str(&toml).unwrap()
+        match toml::from_str(&toml) {
+            Ok(config) => config,
+            Err(e) => {
+                log::error!("Failed to parse config: {e}.");
+                std::process::exit(-1)
+            }
+        }
     } else {
         log::info!("Failed to load config, using default and saving default.");
         save_config(&Config::default()).unwrap();

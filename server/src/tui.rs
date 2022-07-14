@@ -10,6 +10,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+
 use std::io::{self, Stdout};
 use tui::{
     backend::CrosstermBackend,
@@ -22,6 +23,7 @@ use tui::{
 
 use crate::logging::LogEntry;
 
+/// Main TUI struct
 pub struct Tui {
     logs_rx: mpsc::Receiver<LogEntry>,
     logs: Vec<LogEntry>,
@@ -34,6 +36,7 @@ pub struct Tui {
 
 impl Drop for Tui {
     fn drop(&mut self) {
+        // Restore terminal on drop
         disable_raw_mode().unwrap();
         if let Some(terminal) = &mut self.terminal {
             execute!(
@@ -62,6 +65,8 @@ impl Tui {
         }
     }
 
+    /// Launches the TUI, starting the main loop in new thread
+    /// and returns a handle to that task.
     pub fn launch(mut self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             enable_raw_mode().unwrap();
@@ -80,6 +85,10 @@ impl Tui {
         })
     }
 
+    /// Main loop of TUI
+    /// Handles incoming terminal events and log updates.
+    ///
+    /// Returns whether the loop should be stopped.
     async fn main_loop(&mut self) -> bool {
         let incoming_log = self.logs_rx.recv();
         let event = self.event_stream.next().fuse();
@@ -151,6 +160,7 @@ impl Tui {
         false
     }
 
+    /// Draws TUI
     fn draw(&mut self, frame: &mut Frame<CrosstermBackend<io::Stdout>>) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -163,6 +173,7 @@ impl Tui {
             )
             .split(frame.size());
 
+        // Log items
         let items: Vec<ListItem> = self
             .logs
             .iter()
@@ -198,6 +209,9 @@ impl Tui {
         frame.render_widget(input, chunks[1]);
     }
 
+    /// Consumes the commandline input and tries to use it as a command.
+    ///
+    /// Returns whether the command was an exit command.
     async fn try_command(&mut self) -> bool {
         if self.commandline.is_empty() {
             return false;
@@ -310,6 +324,8 @@ impl Tui {
         false
     }
 
+    /// switch == true => ban
+    /// switch == false => unban
     async fn ban_command(&mut self, target: Option<&str>, switch: bool) {
         let m = if let Some(target) = target {
             self.channel_sender
@@ -326,6 +342,9 @@ impl Tui {
         };
         self.respond(m);
     }
+
+    /// switch == true => add to whitelist
+    /// switch == false => remove from whitelist
     async fn whitelist_command(&mut self, target: Option<&str>, switch: bool) {
         let m = if let Some(target) = target {
             self.channel_sender
@@ -342,6 +361,8 @@ impl Tui {
         };
         self.respond(m);
     }
+
+    // I don't remember why does this exist
     fn respond<T: std::fmt::Display>(&mut self, s: T) {
         log::info!("{}", s);
     }

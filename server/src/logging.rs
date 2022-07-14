@@ -2,6 +2,7 @@ use flexi_logger::{writers::LogWriter, DeferredNow, FormatFunction};
 use log::Record;
 use tokio::sync::mpsc;
 
+/// A single entry in the logs.
 pub struct LogEntry {
     pub level: log::Level,
     pub target: String,
@@ -18,17 +19,18 @@ impl From<&Record<'_>> for LogEntry {
     }
 }
 
-pub struct LogVec {
+/// Sends incoming logs to TUI.
+pub struct LogRouter {
     logs_tx: mpsc::Sender<LogEntry>,
 }
 
-impl LogVec {
+impl LogRouter {
     pub fn new(logs_tx: mpsc::Sender<LogEntry>) -> Self {
         Self { logs_tx }
     }
 }
 
-impl LogWriter for LogVec {
+impl LogWriter for LogRouter {
     fn max_log_level(&self) -> log::LevelFilter {
         log::LevelFilter::Trace
     }
